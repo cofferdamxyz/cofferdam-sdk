@@ -38,10 +38,8 @@
   "bugs": {
     "url": "https://github.com/OffshoreSync/cofferdam-sdk/issues"
   },
-  "dependencies": {
-    "@cofferdam/sdk": "0.0.0"
-  },
   "peerDependencies": {
+    "@cofferdam/sdk": "*",
     "react": "^18.0.0 || ^19.0.0"
   },
   "keywords": [

@@ -1117,6 +1117,36 @@ This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C v
 
 ## 8. Installation and platforms
 
+> **α-1 status (May 2026):** the SDK is **not yet published to npm**. While we're in alpha, install directly from the GitHub repo via single-package **release branches** auto-maintained by `.github/workflows/release-branches.yml`. Each release branch is a single-commit snapshot, force-pushed by CI on every push to its source branch, where the package's contents (built `dist/` + `src/` + `package.json` + `LICENSE`) sit at the repository root — so yarn 1's native `github:owner/repo#branch` syntax works directly, no third-party tarball service required. Both packages must be listed explicitly because `@cofferdam/sdk-react` declares `@cofferdam/sdk` as a `peerDependency`.
+
+### α-1 (GitHub release branches)
+
+```jsonc
+// consumer-app/package.json
+{
+  "dependencies": {
+    "@cofferdam/sdk":       "github:OffshoreSync/cofferdam-sdk#release-core-tests",
+    "@cofferdam/sdk-react": "github:OffshoreSync/cofferdam-sdk#release-react-tests"
+  }
+}
+```
+
+Then `yarn install` / `npm install` as usual.
+
+**Branch / ref strategy:**
+
+| Source branch | Release branches | When to pin here |
+|---|---|---|
+| `tests` | `release-core-tests`, `release-react-tests` | Fast-moving α-1 development. OffshoreSync preview builds gated behind `VITE_COFFERDAM_PREVIEW=1`. |
+| `main` | `release-core-main`, `release-react-main` | Stable. Promoted from `tests` at phase boundaries (α-1 → α-2, etc.). Reserve for any consumer that ships to production. |
+| any release-branch SHA | n/a | Pin to a specific snapshot for fully reproducible installs: `github:OffshoreSync/cofferdam-sdk#<release-branch-sha>`. |
+
+Release branches are **force-pushed** by CI on every commit to their source branch, so during alpha consumers should run `yarn install --force` (or delete the relevant `node_modules` entry + lockfile entry) to pick up SDK changes. Once we publish to npm, this caveat disappears.
+
+### β onwards (npm registry)
+
+Once we publish to npm under the `@cofferdam` org, the install reduces to:
+
 ```bash
 # Core (framework-agnostic TypeScript)
 npm install @cofferdam/sdk
