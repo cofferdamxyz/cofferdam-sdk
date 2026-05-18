@@ -1,0 +1,57 @@
+{
+  "name": "@cofferdam/sdk",
+  "version": "0.0.0",
+  "description": "Sign in with Cofferdam — verified-identity, ZK-proof, on-chain-signing primitive for any app. Framework-agnostic core.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mock": {
+      "types": "./dist/providers/MockProvider.d.ts",
+      "import": "./dist/providers/MockProvider.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean && rm -rf dist"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OffshoreSync/cofferdam-sdk.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/OffshoreSync/cofferdam-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/OffshoreSync/cofferdam-sdk/issues"
+  },
+  "keywords": [
+    "cofferdam",
+    "offshoresync",
+    "identity",
+    "wallet",
+    "web3",
+    "zksync",
+    "celo",
+    "self-protocol",
+    "passport",
+    "zk"
+  ]
+}
