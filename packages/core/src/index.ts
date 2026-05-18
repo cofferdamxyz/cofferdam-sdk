@@ -9,6 +9,12 @@ export {
   SignInRejected,
   type MockProviderConfig,
 } from './providers/MockProvider.js'
+export {
+  mockProfiles,
+  getMockProfile,
+  type MockProfile,
+  type MockProfileName,
+} from './providers/mockProfiles.js'
 export { derivePseudonym, deriveScopeKey } from './identity/pseudonym.js'
 
 export type {

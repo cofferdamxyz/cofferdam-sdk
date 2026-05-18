@@ -22,6 +22,13 @@ import type {
   VerifiedClaims,
 } from '../types.js'
 
+// This module is the `@cofferdam/sdk/mock` entry point per the package's
+// `exports` map. We re-export the named-fixture registry (`mockProfiles`,
+// `getMockProfile`) so consumer apps can pick a profile without a separate
+// `@cofferdam/sdk/mock-profiles` import path.
+export { mockProfiles, getMockProfile } from './mockProfiles.js'
+export type { MockProfile, MockProfileName } from './mockProfiles.js'
+
 export interface MockProviderConfig {
   scope: string
   /**

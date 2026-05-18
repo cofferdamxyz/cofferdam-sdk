@@ -662,6 +662,32 @@ const proof = await cofferdam.proofs.request({
 // → { proof, publicSignals, verifierAddress, attesterSig }
 ```
 
+### 4.8 Development: mock provider and named fixtures
+
+During α-1 (no Cofferdam mobile app, no chain), `network: 'mock'` instantiates an in-process `MockProvider` that returns deterministic-but-realistic `SignInResponse` values. The SDK ships a registry of named fixtures that exercise each `SignInPolicy` gate documented in §3 — pick one with an env var, no code change required.
+
+```ts
+import { MockProvider, mockProfiles } from '@cofferdam/sdk/mock'
+
+const profile = process.env.COFFERDAM_MOCK_PROFILE ?? 'verified-br'
+const provider = new MockProvider({
+  scope: 'offshoresync',
+  ...mockProfiles[profile],
+})
+```
+
+| Profile | `verified` | Country | Age band | OFAC | Proof age | Tests |
+|---|---|---|---|---|---|---|
+| `verified-br` *(default)* | true | BR | 18+ | clear | fresh | happy path |
+| `verified-us` | true | US | 21+ | clear | fresh | `allowedCountries` / `blockedCountries` gates |
+| `unverified` | false | — | — | — | — | `enforceSelfBeforeAccount: true` rejection |
+| `ofac-flagged` | true | XX | 18+ | **flagged** | fresh | sanctions-screening UI |
+| `stale-proof` | true | BR | 18+ | clear | **200 days old** | `requireVerifiedWithin` re-verification flow |
+
+Each profile has a stable `mockUserId`, so a given profile's `appPseudonym` and `accountAddress` are byte-identical across runs — useful for snapshot tests and screenshot pipelines. `getMockProfile(name)` is a runtime-safe lookup that throws on typos with a list of available names.
+
+> **Stability contract:** within a semver-minor release, profile names map to fixed `mockUserId`s and therefore fixed derived identifiers. New profiles may land in minor releases; existing ones will not change identifiers.
+
 ---
 
 ## 5. Security model
