@@ -1157,7 +1157,7 @@ This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C v
 }
 ```
 
-Then `yarn install` / `npm install` as usual.
+Then `yarn install` / `npm install` as usual. For a runnable starting template see [`examples/capacitor-minimal/`](./examples/capacitor-minimal/) — a Vite + React + Capacitor 7 app that mounts `<CofferdamProvider>` + the drop-in `<SignInWithCofferdamButton>` in <80 lines of TSX.
 
 **Branch / ref strategy:**
 
