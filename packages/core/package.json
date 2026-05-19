@@ -15,7 +15,19 @@
     "./mock": {
       "types": "./dist/providers/MockProvider.d.ts",
       "import": "./dist/providers/MockProvider.js"
+    },
+    "./local": {
+      "types": "./dist/providers/LocalChainProvider.d.ts",
+      "import": "./dist/providers/LocalChainProvider.js"
     }
+  },
+  "peerDependencies": {
+    "ethers": "^6.13.0",
+    "zksync-ethers": "^6.15.0"
+  },
+  "peerDependenciesMeta": {
+    "ethers": { "optional": true },
+    "zksync-ethers": { "optional": true }
   },
   "files": [
     "dist",

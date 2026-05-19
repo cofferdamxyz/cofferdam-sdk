@@ -10,6 +10,10 @@ export {
   type MockProviderConfig,
 } from './providers/MockProvider.js'
 export {
+  LocalChainProvider,
+  type LocalChainProviderConfig,
+} from './providers/LocalChainProvider.js'
+export {
   mockProfiles,
   getMockProfile,
   type MockProfile,
