@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local-chain": "VITE_COFFERDAM_NETWORK=local-chain vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -22,8 +23,10 @@
     "@capacitor/ios": "^7.0.0",
     "@cofferdam/sdk": "*",
     "@cofferdam/sdk-react": "*",
+    "ethers": "^6.13.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "zksync-ethers": "^6.15.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",
