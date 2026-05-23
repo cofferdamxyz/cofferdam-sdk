@@ -108,6 +108,7 @@ The SDK's `peerDependencies` declare `@cofferdam/sdk` explicitly so both URLs mu
 | [`src/App.tsx`](./src/App.tsx) | Top-level switcher (mock vs local-chain) + `MockDemo` |
 | [`src/LocalChainDemo.tsx`](./src/LocalChainDemo.tsx) | Three-role on-chain harness (α-2) |
 | [`src/index.css`](./src/index.css) | Minimal styling |
+| [`scripts/tail-chain.mjs`](./scripts/tail-chain.mjs) | RPC tx tail — decodes Receiver/Escrow calls + events live (see §6) |
 | [`.env.example`](./.env.example) | Documents all `VITE_*` knobs |
 
 ---
@@ -129,13 +130,14 @@ End-to-end interactive test: sign in three roles, drive the full corporate flow 
    cp .env.example .env.local
    ```
 
-### Each session (3 terminals)
+### Each session (4 terminals)
 
 **Terminal 1 — anvil-zksync node** (from `contracts/`):
 ```bash
 yarn node:start
 # anvil-zksync is now listening on http://127.0.0.1:8011 (chain 260).
-# Leave it running. Every tx the demo fires will print here.
+# Leave it running. anvil-zksync's default output is terse — for a
+# decoded per-tx log, use Terminal 4 below.
 ```
 
 **Terminal 2 — deploy the v1/zksync contracts** (also from `contracts/`):
@@ -160,16 +162,33 @@ yarn workspace @cofferdam/example-capacitor-minimal dev:local-chain
 # → http://localhost:5173
 ```
 
+**Terminal 4 — RPC tx tail** (decoded mirror of every Receiver/Escrow call). Optional but strongly recommended: it's the only way to actually see *what's happening* on chain in real time — anvil-zksync's stdout is too terse and the in-app activity log only captures escrow actions you fire from the buttons (it misses bind/pre-fund txs).
+```bash
+yarn workspace @cofferdam/example-capacitor-minimal tail
+# Backfills the last 50 blocks, then tails new ones with a 10-second
+# heartbeat when the chain is idle.
+#
+# Useful flags:
+#   --backfill=500   replay deeper history on startup
+#   --backfill=0     skip backfill entirely
+#   --all            don't filter — print EVERY tx, not just Receiver/Escrow
+#                    (handy for confirming pre-fund transfers from the admin
+#                    EOA → user EOAs during sign-in)
+```
+Reads `RPC` / `RECEIVER` / `ESCROW` from `.env.local` automatically (falls back to `VITE_LOCAL_*` keys). Override at runtime with env: `RECEIVER=0x… ESCROW=0x… yarn workspace @cofferdam/example-capacitor-minimal tail`.
+
 ### Click through the flow
 
-1. Click **Sign in as Recruiter (HR)** → Terminal 1 shows a `bindNullifier` tx + a pre-fund transfer.
-2. Click **Sign in as Funder (Finance)** → another bind + pre-fund.
-3. Click **Sign in as Worker (Crew)** → another bind + pre-fund.
-4. Click **1️⃣ Post intent → Finance** → one `postContractIntent` tx. The activity row shows the contract id (e.g. `contract #1`); no funds locked yet.
-5. Click **2️⃣ Fund contract #1** → one `fundContract` tx from the Funder, with `value = 0.1 ETH`. Funder's balance drops by ~0.1 ETH + gas.
-6. Click **3️⃣ Award worker** → `awardContract` tx from the Recruiter.
-7. Click **4️⃣ Check in** then **5️⃣ Check out** → two txs from the Worker.
-8. Click **6️⃣ Settle (pay worker)** → final tx; Worker's balance grows by `0.1 ETH`.
+Each click below produces one or more decoded lines in Terminal 4. The `↳ Escrow.X(...)` lines are events; the lead line is the tx + the function it called.
+
+1. Click **Sign in as Recruiter (HR)** → admin EOA pre-funds the user's deterministic address, then `Receiver.bindNullifier(account=…, nullifier=…)` lands. Both visible with `--all`; only the bind shows in default mode.
+2. Click **Sign in as Funder (Finance)** → another pre-fund + bind.
+3. Click **Sign in as Worker (Crew)** → another pre-fund + bind.
+4. Click **1️⃣ Post intent → Finance** → one `Escrow.postContractIntent(termsHash, amount, designatedFunder)` tx. Emits `ContractDrafted(contractId=N, …)`. No funds locked yet.
+5. Click **2️⃣ Fund contract #N** → one `Escrow.fundContract(contractId=N) value=0.1 ETH` tx from the Funder. Emits `ContractFunded` + `ContractPosted`. Funder's balance drops by ~0.1 ETH + gas.
+6. Click **3️⃣ Award worker** → `Escrow.awardContract(contractId=N, workerAccount=…)` from the Recruiter.
+7. Click **4️⃣ Check in** then **5️⃣ Check out** → two txs from the Worker (`checkIn` / `checkOut`).
+8. Click **6️⃣ Settle (pay worker)** → `Escrow.settle(contractId=N)`; emits `ContractSettled(contractId=N, worker=…, amount=0.1 ETH)`. Worker's balance grows by 0.1 ETH.
 
 If you'd rather test the α-2 self-funded path instead, click **1️⃣ Post self-funded job** after signing the Recruiter in — that's one tx that posts AND funds in a single call (the original α-2 entry point, preserved for solo operators).
 
@@ -183,6 +202,9 @@ The demo's deterministic-EOA derivation means the same `VITE_LOCAL_RECRUITER_ID=
 ### Troubleshooting
 
 - **"Missing VITE_LOCAL_RECEIVER_ADDRESS"** → you haven't pasted the deploy output into `.env.local` (or didn't restart Vite after editing it).
-- **Sign-in error mentioning `network ... failed to detect`** → anvil-zksync isn't reachable. Check Terminal 1; the port (8011) may have been claimed by another process.
+- **Sign-in error mentioning `network ... failed to detect`** → anvil-zksync isn't reachable. Check Terminal 1; the port (8011) may have been claimed by another process. Quick fix: `kill $(lsof -ti :8011)` and restart `yarn node:start`.
+- **Anvil falls back to a random port** (`Failed to bind to address 0.0.0.0:8011 ... Listening on 0.0.0.0:53426`) → another anvil-zksync from a previous session is still running. Same fix as above. Note that re-deploying the contracts is mandatory after this — the addresses in `.env.local` were on the killed node, not the new one.
+- **Tail prints nothing after clicking buttons** → the demo's RPC and the tail's RPC don't match, OR the deployed addresses in `.env.local` don't match what's actually on chain. Sanity check: `yarn workspace @cofferdam/example-capacitor-minimal tail --backfill=4000 --all` — if even with `--all` and a deep backfill you see nothing, your addresses are stale; redeploy and update `.env.local`.
+- **Tail decodes events but shows `selector=0x71f8…` for every call** → you're on an older `tail-chain.mjs` that used `getTransaction()` instead of raw `eth_getTransactionByHash`. `0x71f8…` is the ZKSync EIP-712 envelope, not real calldata. Pull latest.
 - **Fund button stays disabled** → the funder must sign in *and* a draft must exist. The button label shows `Fund contract #—` until a draft id is set.
 - **Settle reverts with `NotCheckedOut`** → you skipped check-in / check-out. The buttons are in order top-to-bottom for a reason.

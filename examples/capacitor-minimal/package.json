@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "dev:local-chain": "VITE_COFFERDAM_NETWORK=local-chain vite",
+    "tail": "node scripts/tail-chain.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
