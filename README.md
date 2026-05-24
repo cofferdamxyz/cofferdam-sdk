@@ -662,6 +662,114 @@ const proof = await cofferdam.proofs.request({
 // → { proof, publicSignals, verifierAddress, attesterSig }
 ```
 
+### 4.7a On-chain escrow (α-2)
+
+The SDK ships a typed client for the `OffshoreSyncEscrow` v1/zksync contract. It handles both posting paths, the full lifecycle, contract-id extraction from receipts, and the status enum. Consumer apps integrating the on-chain employment-escrow flow import it instead of re-deriving the ABI.
+
+```ts
+import { OffshoreSyncEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
+import { Wallet as ZkWallet } from 'zksync-ethers'
+
+const escrow = new OffshoreSyncEscrowClient({
+  address: '0x22281d75CF1d34421e5Fc58625885b46dC309723', // Sepolia α-2 deploy
+  signer:  recruiterWallet,                              // any Cofferdam-bound ZkWallet
+})
+```
+
+#### Self-funded path (solo operator / small business)
+
+Recruiter posts AND funds in a single tx:
+
+```ts
+const termsHash = OffshoreSyncEscrowClient.hashTerms({
+  jobId: 'tideboat-galley-may-2026',
+  workerProfile: '@cofferdam:abc…',
+  pay: { amount: '0.001', token: 'ETH' },
+})
+const { contractId, txHash } = await escrow.postContract(
+  termsHash,
+  1_000_000_000_000_000n, // 0.001 ETH in wei
+  { onSent: (h) => console.log('submitted:', h) },
+)
+```
+
+#### Corporate path (recruiter ≠ funder)
+
+Recruiter (HR) drafts an intent; a designated Finance address funds it as a separate tx. The recruiter only pays gas in the draft tx — no ETH movement until Finance signs.
+
+```ts
+// 1. HR drafts (no funds locked)
+const { contractId } = await escrow.postContractIntent(
+  termsHash,
+  amountWei,
+  financeAddress,           // or OPEN_FUNDING for "any bound account may fund"
+)
+
+// 2. Finance funds (separate tx, may come hours/days later)
+const escrowAsFinance = new OffshoreSyncEscrowClient({
+  address: escrow.address,
+  signer:  financeWallet,
+})
+await escrowAsFinance.fundContract(contractId, amountWei)
+```
+
+After funding, both paths converge — `awardContract`, `checkIn`, `checkOut`, and `settle` are identical regardless of which path was used. `settle` carries no value: the escrow contract pays the worker from its locked balance via an internal call, so any signed-in role (or a paymaster keeper) can trigger it.
+
+#### React: picking the funder
+
+`@cofferdam/sdk-react` ships a `useFunderPicker()` hook for the recruiter-side UX of choosing a `designatedFunder`. It owns:
+
+- a deduped, ordered candidate list (your `suggestions` + `localStorage`-persisted recent picks)
+- selected-funder state
+- cheap shape-only address validation (the on-chain `onlyBoundAccount` check happens at funding time)
+- a `recordUsage(address, label?)` callback to bump someone to "most recent" after a successful fund tx
+
+```tsx
+import { useFunderPicker } from '@cofferdam/sdk-react'
+import { OffshoreSyncEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
+
+function DraftJobForm({ recruiterWallet, suggestionsFromBackend }) {
+  const picker = useFunderPicker({
+    suggestions: suggestionsFromBackend,            // [{ address, label }]
+    storageKey:  'offshoresync:funders:dispatch',   // optional, scope-namespaced
+  })
+
+  const onDraft = async () => {
+    const escrow = new OffshoreSyncEscrowClient({ address, signer: recruiterWallet })
+    const { contractId } = await escrow.postContractIntent(
+      termsHash,
+      amountWei,
+      picker.selectedFunder?.address ?? OPEN_FUNDING,
+    )
+    if (picker.selectedFunder) {
+      picker.recordUsage(picker.selectedFunder.address, picker.selectedFunder.label)
+    }
+    // …navigate to contract detail
+  }
+
+  return (
+    <div>
+      {picker.candidates.map((c) => (
+        <button key={c.address} onClick={() => picker.selectFunder(c)}>
+          {c.label ?? c.address}
+        </button>
+      ))}
+      <input
+        placeholder="0x… (paste address)"
+        onChange={(e) => picker.selectFunderByAddress(e.target.value)}
+      />
+      <button onClick={onDraft} disabled={!picker.selectedFunder}>
+        Draft job
+      </button>
+    </div>
+  )
+}
+```
+
+The hook does **not** verify the picked address is Cofferdam-bound on-chain — the escrow contract enforces that at funding time via `onlyBoundAccount`. If you want a pre-flight UX check ("This address can't fund yet — invite them to Cofferdam first"), call `receiver.isAccountBound(address)` on your `OffshoreSyncReceiver` instance and gate the button accordingly.
+
+A fully-worked three-role demo (recruiter + funder + worker, both posting paths, local + Sepolia) lives in [`examples/capacitor-minimal`](./examples/capacitor-minimal).
+
 ### 4.8 Development: mock provider and named fixtures
 
 During α-1 (no Cofferdam mobile app, no chain), `network: 'mock'` instantiates an in-process `MockProvider` that returns deterministic-but-realistic `SignInResponse` values. The SDK ships a registry of named fixtures that exercise each `SignInPolicy` gate documented in §3 — pick one with an env var, no code change required.

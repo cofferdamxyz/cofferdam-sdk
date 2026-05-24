@@ -37,14 +37,17 @@
 //     escrow client on the SDK".
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { keccak256, toUtf8Bytes, type Interface } from 'ethers'
 import {
   Provider as ZkProvider,
   Wallet as ZkWallet,
-  Contract as ZkContract,
 } from 'zksync-ethers'
 import { LocalChainProvider } from '@cofferdam/sdk/local'
-import type { SignInResponse } from '@cofferdam/sdk'
+import {
+  OffshoreSyncEscrowClient,
+  OPEN_FUNDING,
+  type SignInResponse,
+} from '@cofferdam/sdk'
+import { useFunderPicker } from '@cofferdam/sdk-react'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Env-driven config
@@ -140,19 +143,6 @@ function buildConfig(chain: ChainTarget): ChainConfig {
     explorerBase: null,
   }
 }
-
-const ESCROW_ABI = [
-  'function postContract(bytes32 termsHash) payable returns (uint256)',
-  'function postContractIntent(bytes32 termsHash, uint256 amount, address designatedFunder) returns (uint256)',
-  'function fundContract(uint256 contractId) payable',
-  'function awardContract(uint256 contractId, address workerAccount)',
-  'function checkIn(uint256 contractId)',
-  'function checkOut(uint256 contractId)',
-  'function settle(uint256 contractId)',
-  'function getContract(uint256 contractId) view returns (tuple(address recruiter, address designatedFunder, address funder, address worker, uint256 amount, bytes32 termsHash, uint64 draftedAt, uint64 postedAt, uint64 awardedAt, uint64 checkedInAt, uint64 checkedOutAt, uint8 status))',
-  'event ContractDrafted(uint256 indexed contractId, address indexed recruiter, address indexed designatedFunder, uint256 amount, bytes32 termsHash)',
-  'event ContractPosted(uint256 indexed contractId, address indexed recruiter, uint256 amount, bytes32 termsHash)',
-] as const
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
@@ -284,6 +274,26 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
   const [txs, setTxs] = useState<TxEntry[]>([])
   const [lastContractId, setLastContractId] = useState<bigint | null>(null)
 
+  // Corporate-flow funder picker. The signed-in Finance role is offered as a
+  // suggestion (the canonical demo path), but the recruiter is free to type
+  // any address or pick OPEN_FUNDING. Persisted per chain target so flipping
+  // between local/testnet doesn't cross-contaminate recent picks.
+  const funderSuggestions = useMemo(() => {
+    const finance = roles.funder.session?.accountAddress
+    if (!finance) return []
+    return [{ address: finance, label: 'Sign-in: Finance' }]
+  }, [roles.funder.session?.accountAddress])
+  const funderPicker = useFunderPicker({
+    suggestions: funderSuggestions,
+    storageKey: `cofferdam:funders:capacitor-minimal:${chain}`,
+  })
+
+  // Resolve which address to actually pass to postContractIntent: picker
+  // selection wins, fall back to the signed-in Finance role for one-click
+  // demo continuity.
+  const designatedFunderAddress =
+    funderPicker.selectedFunder?.address ?? roles.funder.session?.accountAddress ?? null
+
   const updateRole = useCallback((role: Role, patch: Partial<RoleState>) => {
     setRoles((prev) => ({ ...prev, [role]: { ...prev[role], ...patch } }))
   }, [])
@@ -357,154 +367,169 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
   )
 
   // ── Escrow actions ───────────────────────────────────────────────────
+  //
+  // All flows go through `OffshoreSyncEscrowClient` from @cofferdam/sdk.
+  // The client owns: ABI, event decoding, contract-id extraction, and the
+  // status enum. We just wire it to each role's signing wallet and surface
+  // the tx hash to the activity log via the `onSent` hook.
+  const escrowFor = useCallback(
+    (wallet: ZkWallet) =>
+      new OffshoreSyncEscrowClient({ address: cfg.escrow, signer: wallet }),
+    [cfg.escrow],
+  )
+
   const postSelfFunded = useCallback(async () => {
     const wallet = roles.recruiter.wallet
     if (!wallet) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
-    const termsHash = keccak256(toUtf8Bytes(`self-${Date.now()}`))
+    const escrow = escrowFor(wallet)
+    const termsHash = OffshoreSyncEscrowClient.hashTerms(`self-${Date.now()}`)
     const tx = newTx(
       setTxs,
       `🧾 postContract (self-funded, ${fmtEth(cfg.amountWei)})`,
       cfg.explorerBase,
     )
     try {
-      const sent = await escrow.postContract(termsHash, { value: cfg.amountWei })
-      tx.setHash(sent.hash)
-      const receipt = await sent.wait()
-      const cid = extractContractId(
-        escrow.interface,
-        receipt.logs,
-        'ContractPosted',
-        cfg.escrow,
-      )
-      if (cid) {
-        setLastContractId(cid)
-        tx.successWithContract(cid)
-      } else {
-        tx.success()
-      }
+      const { contractId } = await escrow.postContract(termsHash, cfg.amountWei, {
+        onSent: (h) => tx.setHash(h),
+      })
+      setLastContractId(contractId)
+      tx.successWithContract(contractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, cfg])
+  }, [roles.recruiter.wallet, escrowFor, cfg.amountWei, cfg.explorerBase])
 
   const postIntent = useCallback(async () => {
     const wallet = roles.recruiter.wallet
-    const funderAddr = roles.funder.session?.accountAddress
-    if (!wallet || !funderAddr) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
-    const termsHash = keccak256(toUtf8Bytes(`intent-${Date.now()}`))
+    if (!wallet || !designatedFunderAddress) return
+    const escrow = escrowFor(wallet)
+    const termsHash = OffshoreSyncEscrowClient.hashTerms(`intent-${Date.now()}`)
+    const isOpenFunding = designatedFunderAddress === OPEN_FUNDING
     const tx = newTx(
       setTxs,
-      `🧾 postContractIntent (${fmtEth(cfg.amountWei)} → ${shortAddr(funderAddr)})`,
+      isOpenFunding
+        ? `🧾 postContractIntent (${fmtEth(cfg.amountWei)} → open funding)`
+        : `🧾 postContractIntent (${fmtEth(cfg.amountWei)} → ${shortAddr(designatedFunderAddress)})`,
       cfg.explorerBase,
     )
     try {
-      const sent = await escrow.postContractIntent(termsHash, cfg.amountWei, funderAddr)
-      tx.setHash(sent.hash)
-      const receipt = await sent.wait()
-      const cid = extractContractId(
-        escrow.interface,
-        receipt.logs,
-        'ContractDrafted',
-        cfg.escrow,
+      const { contractId } = await escrow.postContractIntent(
+        termsHash,
+        cfg.amountWei,
+        designatedFunderAddress,
+        { onSent: (h) => tx.setHash(h) },
       )
-      if (cid) {
-        setLastContractId(cid)
-        tx.successWithContract(cid)
-      } else {
-        tx.success()
-      }
+      setLastContractId(contractId)
+      tx.successWithContract(contractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.funder.session?.accountAddress, cfg])
+  }, [roles.recruiter.wallet, designatedFunderAddress, escrowFor, cfg.amountWei, cfg.explorerBase])
 
   const fundContract = useCallback(async () => {
     const wallet = roles.funder.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const escrow = escrowFor(wallet)
     const tx = newTx(
       setTxs,
       `💸 fundContract #${lastContractId} (${fmtEth(cfg.amountWei)})`,
       cfg.explorerBase,
     )
     try {
-      const sent = await escrow.fundContract(lastContractId, { value: cfg.amountWei })
-      tx.setHash(sent.hash)
-      await sent.wait()
+      await escrow.fundContract(lastContractId, cfg.amountWei, {
+        onSent: (h) => tx.setHash(h),
+      })
       tx.successWithContract(lastContractId)
+      // Bump the funder up the recent list so re-running with a fresh
+      // recruiter ID surfaces them first.
+      const addr = roles.funder.session?.accountAddress
+      if (addr) funderPicker.recordUsage(addr, 'Sign-in: Finance')
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.funder.wallet, lastContractId, cfg])
+  }, [
+    roles.funder.wallet,
+    roles.funder.session?.accountAddress,
+    lastContractId,
+    escrowFor,
+    cfg.amountWei,
+    cfg.explorerBase,
+    funderPicker,
+  ])
 
   const awardWorker = useCallback(async () => {
     const wallet = roles.recruiter.wallet
     const workerAddr = roles.worker.session?.accountAddress
     if (!wallet || !workerAddr || lastContractId == null) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const escrow = escrowFor(wallet)
     const tx = newTx(
       setTxs,
       `🏷  awardContract #${lastContractId} → ${shortAddr(workerAddr)}`,
       cfg.explorerBase,
     )
     try {
-      const sent = await escrow.awardContract(lastContractId, workerAddr)
-      tx.setHash(sent.hash)
-      await sent.wait()
+      await escrow.awardContract(lastContractId, workerAddr, {
+        onSent: (h) => tx.setHash(h),
+      })
       tx.successWithContract(lastContractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.worker.session?.accountAddress, lastContractId, cfg])
+  }, [
+    roles.recruiter.wallet,
+    roles.worker.session?.accountAddress,
+    lastContractId,
+    escrowFor,
+    cfg.explorerBase,
+  ])
 
   const checkIn = useCallback(async () => {
     const wallet = roles.worker.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const escrow = escrowFor(wallet)
     const tx = newTx(setTxs, `🕒 checkIn #${lastContractId}`, cfg.explorerBase)
     try {
-      const sent = await escrow.checkIn(lastContractId)
-      tx.setHash(sent.hash)
-      await sent.wait()
+      await escrow.checkIn(lastContractId, { onSent: (h) => tx.setHash(h) })
       tx.successWithContract(lastContractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId, cfg])
+  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase])
 
   const checkOut = useCallback(async () => {
     const wallet = roles.worker.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const escrow = escrowFor(wallet)
     const tx = newTx(setTxs, `🕔 checkOut #${lastContractId}`, cfg.explorerBase)
     try {
-      const sent = await escrow.checkOut(lastContractId)
-      tx.setHash(sent.hash)
-      await sent.wait()
+      await escrow.checkOut(lastContractId, { onSent: (h) => tx.setHash(h) })
       tx.successWithContract(lastContractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId, cfg])
+  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase])
 
   const settle = useCallback(async () => {
     // Any signed-in wallet can call settle. We use the recruiter for parity
     // with the integration test; in production the Cofferdam paymaster bot does.
     const wallet = roles.recruiter.wallet ?? roles.funder.wallet ?? roles.worker.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const escrow = escrowFor(wallet)
     const tx = newTx(setTxs, `✅ settle #${lastContractId}`, cfg.explorerBase)
     try {
-      const sent = await escrow.settle(lastContractId)
-      tx.setHash(sent.hash)
-      await sent.wait()
+      await escrow.settle(lastContractId, { onSent: (h) => tx.setHash(h) })
       tx.successWithContract(lastContractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.funder.wallet, roles.worker.wallet, lastContractId, cfg])
+  }, [
+    roles.recruiter.wallet,
+    roles.funder.wallet,
+    roles.worker.wallet,
+    lastContractId,
+    escrowFor,
+    cfg.explorerBase,
+  ])
 
   // ── Render ─────────────────────────────────────────────────────────────
   const title = chain === 'testnet' ? 'Cofferdam Sepolia Demo' : 'Cofferdam Local-Chain Demo'
@@ -607,6 +632,12 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
         ))}
       </div>
 
+      <FunderPickerPanel
+        picker={funderPicker}
+        chainExplorerBase={cfg.explorerBase}
+        signedInFunder={roles.funder.session?.accountAddress ?? null}
+      />
+
       <h2 className="section-h">Actions</h2>
       <div className="actions">
         <button
@@ -620,10 +651,13 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
         <button
           className="action"
           onClick={postIntent}
-          disabled={!roles.recruiter.wallet || !roles.funder.session}
-          title="Recruiter drafts a contract designating Finance as the funder. 1 tx, no funds yet."
+          disabled={!roles.recruiter.wallet || !designatedFunderAddress}
+          title="Recruiter drafts a contract designating the picked funder. 1 tx, no funds yet."
         >
-          1️⃣ Post intent → Finance
+          1️⃣ Post intent →{' '}
+          {designatedFunderAddress === OPEN_FUNDING
+            ? 'open'
+            : shortAddr(designatedFunderAddress)}
         </button>
         <button
           className="action"
@@ -754,6 +788,136 @@ function emptyRoleState(): RoleState {
   return { session: null, wallet: null, balance: null, signing: false, error: null }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Funder picker UI
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Small inline UI exercising `useFunderPicker` from @cofferdam/sdk-react.
+// Renders:
+//   - candidate chips (signed-in Finance role + recents)
+//   - a manual-paste input for ad-hoc addresses
+//   - an "open funding" toggle (sends address(0) to the contract)
+// The picker itself owns dedup/persistence; this component is just chrome.
+
+interface FunderPickerPanelProps {
+  picker: ReturnType<typeof useFunderPicker>
+  chainExplorerBase: string | null
+  signedInFunder: string | null
+}
+
+function FunderPickerPanel({
+  picker,
+  chainExplorerBase,
+  signedInFunder,
+}: FunderPickerPanelProps) {
+  const [manual, setManual] = useState('')
+  const selected = picker.selectedFunder
+  const isOpen = selected?.address === OPEN_FUNDING
+  const fallback = !selected && signedInFunder
+    ? { address: signedInFunder, label: 'Sign-in: Finance (default)' }
+    : null
+  const effective = selected ?? fallback
+
+  const tryManual = () => {
+    const trimmed = manual.trim()
+    if (!picker.isValidAddress(trimmed)) return
+    picker.selectFunderByAddress(trimmed, 'Manual entry')
+    setManual('')
+  }
+
+  return (
+    <div className="funder-picker">
+      <h2 className="section-h">Designated funder (corporate flow)</h2>
+      <p className="funder-hint">
+        Picked address is passed to <code>postContractIntent</code> as{' '}
+        <code>designatedFunder</code>. Choose <em>open funding</em> to allow any
+        Cofferdam-bound account to fund the draft.
+      </p>
+
+      <div className="funder-selected">
+        <strong>Selected:</strong>{' '}
+        {effective ? (
+          <>
+            {isOpen ? (
+              <code>OPEN_FUNDING (address(0))</code>
+            ) : chainExplorerBase ? (
+              <a
+                href={`${chainExplorerBase}/address/${effective.address}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <code>{shortAddr(effective.address)}</code>
+              </a>
+            ) : (
+              <code>{shortAddr(effective.address)}</code>
+            )}
+            {effective.label && <span className="funder-label"> · {effective.label}</span>}
+            {!selected && <span className="funder-label"> · (fallback)</span>}
+          </>
+        ) : (
+          <span className="funder-empty">— sign Finance in or paste an address —</span>
+        )}
+      </div>
+
+      <div className="funder-candidates">
+        {picker.candidates.map((c) => {
+          const active = selected?.address === c.address
+          return (
+            <button
+              key={c.address}
+              className={`funder-chip ${active ? 'funder-chip-on' : ''}`}
+              onClick={() => picker.selectFunder(c)}
+              title={c.address}
+            >
+              {c.label ?? shortAddr(c.address)}
+              {c.lastUsedAt && <span className="funder-recent"> · recent</span>}
+            </button>
+          )
+        })}
+        <button
+          className={`funder-chip funder-chip-open ${isOpen ? 'funder-chip-on' : ''}`}
+          onClick={() =>
+            picker.selectFunder({ address: OPEN_FUNDING, label: 'Open funding (any bound account)' })
+          }
+          title="address(0) — any Cofferdam-bound account can fund"
+        >
+          Open funding
+        </button>
+        {selected && (
+          <button
+            className="funder-chip funder-chip-clear"
+            onClick={() => picker.selectFunder(null)}
+            title="Fall back to the signed-in Finance role"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      <div className="funder-manual">
+        <input
+          type="text"
+          placeholder="0x… manual address"
+          value={manual}
+          onChange={(e) => setManual(e.target.value)}
+          spellCheck={false}
+        />
+        <button
+          onClick={tryManual}
+          disabled={!picker.isValidAddress(manual.trim())}
+        >
+          Use address
+        </button>
+        {picker.recent.length > 0 && (
+          <button className="funder-clear-recent" onClick={picker.clearRecent}>
+            Clear recents ({picker.recent.length})
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function errMsg(e: unknown): string {
   if (e instanceof Error) return e.message
   return String(e)
@@ -783,22 +947,3 @@ function newTx(
   }
 }
 
-function extractContractId(
-  iface: Interface,
-  logs: ReadonlyArray<{ topics: ReadonlyArray<string>; data: string; address: string }>,
-  eventName: 'ContractDrafted' | 'ContractPosted',
-  escrowAddress: string,
-): bigint | null {
-  const ev = iface.getEvent(eventName)
-  if (!ev) return null
-  const topic = ev.topicHash
-  const target = escrowAddress.toLowerCase()
-  for (const l of logs) {
-    if (l.topics[0] !== topic) continue
-    if (l.address.toLowerCase() !== target) continue
-    const parsed = iface.parseLog({ topics: [...l.topics], data: l.data })
-    if (!parsed) continue
-    return parsed.args.contractId as bigint
-  }
-  return null
-}

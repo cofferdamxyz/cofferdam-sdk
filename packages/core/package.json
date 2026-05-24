@@ -19,6 +19,10 @@
     "./local": {
       "types": "./dist/providers/LocalChainProvider.d.ts",
       "import": "./dist/providers/LocalChainProvider.js"
+    },
+    "./escrow": {
+      "types": "./dist/escrow/OffshoreSyncEscrowClient.d.ts",
+      "import": "./dist/escrow/OffshoreSyncEscrowClient.js"
     }
   },
   "peerDependencies": {

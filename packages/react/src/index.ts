@@ -9,6 +9,12 @@ export {
 
 export { useCofferdam } from './useCofferdam.js'
 export { useSignInWithCofferdam } from './useSignInWithCofferdam.js'
+export {
+  useFunderPicker,
+  type FunderCandidate,
+  type UseFunderPickerOptions,
+  type UseFunderPickerResult,
+} from './useFunderPicker.js'
 
 export {
   SignInWithCofferdamButton,

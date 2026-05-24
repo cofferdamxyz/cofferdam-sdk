@@ -295,3 +295,136 @@ code {
   color: #6a7280;
   font-style: italic;
 }
+
+/* ── Funder picker ────────────────────────────────────────────────────── */
+
+.funder-picker {
+  margin: 0 0 1.25rem;
+  padding: 0.875rem 1rem;
+  background: #f7f9fc;
+  border: 1px solid #d8e3f1;
+  border-radius: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.funder-picker .section-h {
+  margin: 0;
+  font-size: 0.938rem;
+}
+
+.funder-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #6a7280;
+  line-height: 1.4;
+}
+
+.funder-selected {
+  font-size: 0.813rem;
+  color: #1a1a1a;
+}
+
+.funder-selected code {
+  background: #ffffff;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid #d8e3f1;
+  border-radius: 0.25rem;
+}
+
+.funder-label {
+  color: #6a7280;
+  font-size: 0.75rem;
+}
+
+.funder-empty {
+  color: #b8c4d4;
+  font-style: italic;
+}
+
+.funder-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.funder-chip {
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
+  background: #ffffff;
+  border: 1px solid #c8d3e0;
+  border-radius: 999px;
+  color: #1a1a1a;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.funder-chip:hover {
+  border-color: #0a66c2;
+  color: #0a66c2;
+}
+
+.funder-chip-on {
+  background: #0a66c2;
+  border-color: #0a66c2;
+  color: #ffffff;
+}
+
+.funder-chip-on:hover {
+  background: #0851a3;
+  color: #ffffff;
+}
+
+.funder-chip-open {
+  border-style: dashed;
+}
+
+.funder-chip-clear {
+  border-color: transparent;
+  color: #6a7280;
+}
+
+.funder-recent {
+  font-size: 0.625rem;
+  opacity: 0.7;
+  margin-left: 0.25rem;
+}
+
+.funder-manual {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.funder-manual input {
+  flex: 1;
+  min-width: 14rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid #c8d3e0;
+  border-radius: 0.25rem;
+  background: #ffffff;
+}
+
+.funder-manual button {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  background: #ffffff;
+  border: 1px solid #c8d3e0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.funder-manual button:disabled {
+  color: #b8c4d4;
+  cursor: not-allowed;
+}
+
+.funder-clear-recent {
+  margin-left: auto;
+  color: #ef4444 !important;
+  border-color: #fecaca !important;
+}

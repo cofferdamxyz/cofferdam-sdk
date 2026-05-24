@@ -20,6 +20,17 @@ export {
   type MockProfileName,
 } from './providers/mockProfiles.js'
 export { derivePseudonym, deriveScopeKey } from './identity/pseudonym.js'
+export {
+  OffshoreSyncEscrowClient,
+  OFFSHORESYNC_ESCROW_ABI,
+  OPEN_FUNDING,
+  type OffshoreSyncEscrowClientConfig,
+  type PostResult,
+  type TxResult,
+  type TxOptions,
+  type JobContractState,
+  type JobContractStatus,
+} from './escrow/OffshoreSyncEscrowClient.js'
 
 export type {
   CofferdamConfig,
