@@ -1,21 +1,29 @@
 // End-to-end demonstration of @cofferdam/sdk-react.
 //
-// Two modes, selected at build time via VITE_COFFERDAM_NETWORK:
+// Three modes, selected at build time via VITE_COFFERDAM_NETWORK:
 //
-//   - `mock`        (α-1): in-process MockProvider via <CofferdamProvider>.
-//                          Three SDK primitives in <60 lines of TSX:
-//                            1. <CofferdamProvider>
-//                            2. <SignInWithCofferdamButton>
-//                            3. useCofferdam()
+//   - `mock`            (α-1): in-process MockProvider via <CofferdamProvider>.
+//                              Three SDK primitives in <60 lines of TSX:
+//                                1. <CofferdamProvider>
+//                                2. <SignInWithCofferdamButton>
+//                                3. useCofferdam()
 //
-//   - `local-chain` (α-2): real LocalChainProvider against anvil-zksync.
-//                          Two roles on a single page (recruiter + funder)
-//                          drive the full corporate-flow on-chain:
-//                            postContractIntent → fundContract → award →
-//                            checkIn → checkOut → settle.
-//                          You see every tx hash + status as it lands.
+//   - `local-chain`     (α-2): real LocalChainProvider against anvil-zksync.
+//                              Three roles on a single page (recruiter +
+//                              funder + worker) drive the full corporate-flow
+//                              on-chain:
+//                                postContractIntent → fundContract → award →
+//                                checkIn → checkOut → settle.
+//                              You see every tx hash + status as it lands.
 //
-// Both modes share the same SDK; only the provider construction differs.
+//   - `sepolia-testnet` (α-3): same UI + flow as local-chain, but pointed at
+//                              ZKSync Era Sepolia public testnet. Uses a
+//                              separate VITE_TESTNET_* env namespace, scaled-
+//                              down amounts (~100× smaller so the demo
+//                              admin's faucet ETH doesn't drain), and
+//                              clickable block-explorer links on every tx.
+//
+// All modes share the same SDK; only the provider construction differs.
 
 import {
   MockProvider,
@@ -30,9 +38,10 @@ import {
 
 import { LocalChainDemo } from './LocalChainDemo'
 
-const NETWORK_MODE =
-  (import.meta.env.VITE_COFFERDAM_NETWORK as 'mock' | 'local-chain' | undefined) ??
-  'mock'
+type NetworkMode = 'mock' | 'local-chain' | 'sepolia-testnet'
+
+const NETWORK_MODE: NetworkMode =
+  (import.meta.env.VITE_COFFERDAM_NETWORK as NetworkMode | undefined) ?? 'mock'
 
 const MOCK_PROFILE =
   (import.meta.env.VITE_COFFERDAM_MOCK_PROFILE as string | undefined) ??
@@ -94,7 +103,10 @@ function MockDemo() {
 
 export default function App() {
   if (NETWORK_MODE === 'local-chain') {
-    return <LocalChainDemo />
+    return <LocalChainDemo chain="local" />
+  }
+  if (NETWORK_MODE === 'sepolia-testnet') {
+    return <LocalChainDemo chain="testnet" />
   }
   return <MockDemo />
 }

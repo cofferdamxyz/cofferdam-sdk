@@ -43,15 +43,47 @@ if (existsSync(envPath)) {
   }
 }
 
-const RPC = env.RPC || env.VITE_LOCAL_RPC_URL || 'http://127.0.0.1:8011'
-const RECEIVER = env.RECEIVER || env.VITE_LOCAL_RECEIVER_ADDRESS
-const ESCROW   = env.ESCROW   || env.VITE_LOCAL_ESCROW_ADDRESS
+// Mode-aware env resolution. We honour VITE_COFFERDAM_NETWORK so the same
+// `yarn tail` works for whichever mode the demo is currently in:
+//
+//   - mock OR local-chain (default) → reads VITE_LOCAL_* with anvil defaults.
+//   - sepolia-testnet              → reads VITE_TESTNET_* with the deployed
+//                                     Sepolia addresses + public Sepolia RPC
+//                                     as defaults (matches the React demo's
+//                                     buildConfig() in LocalChainDemo.tsx).
+//
+// Hard env overrides (RPC=, RECEIVER=, ESCROW=) still win regardless of
+// mode — useful for ad-hoc tail against a third deploy without touching
+// .env.local.
+const NETWORK_MODE = env.VITE_COFFERDAM_NETWORK || 'mock'
+const IS_TESTNET = NETWORK_MODE === 'sepolia-testnet'
+
+const RPC =
+  env.RPC ||
+  (IS_TESTNET
+    ? env.VITE_TESTNET_RPC_URL || 'https://sepolia.era.zksync.dev'
+    : env.VITE_LOCAL_RPC_URL || 'http://127.0.0.1:8011')
+
+const RECEIVER =
+  env.RECEIVER ||
+  (IS_TESTNET
+    ? env.VITE_TESTNET_RECEIVER_ADDRESS ||
+      '0xa8F46B15F53D619584a00b91559e37233869ab5a'
+    : env.VITE_LOCAL_RECEIVER_ADDRESS)
+
+const ESCROW =
+  env.ESCROW ||
+  (IS_TESTNET
+    ? env.VITE_TESTNET_ESCROW_ADDRESS ||
+      '0x22281d75CF1d34421e5Fc58625885b46dC309723'
+    : env.VITE_LOCAL_ESCROW_ADDRESS)
 
 if (!RECEIVER || !ESCROW) {
+  const ns = IS_TESTNET ? 'VITE_TESTNET' : 'VITE_LOCAL'
   console.error(
-    'Missing RECEIVER / ESCROW addresses. Either set them in .env.local\n' +
-    '(VITE_LOCAL_RECEIVER_ADDRESS / VITE_LOCAL_ESCROW_ADDRESS) or pass via\n' +
-    'env: RECEIVER=0x… ESCROW=0x… node scripts/tail-chain.mjs',
+    `Missing RECEIVER / ESCROW addresses. Either set them in .env.local\n` +
+      `(${ns}_RECEIVER_ADDRESS / ${ns}_ESCROW_ADDRESS) or pass via\n` +
+      `env: RECEIVER=0x… ESCROW=0x… node scripts/tail-chain.mjs`,
   )
   process.exit(1)
 }

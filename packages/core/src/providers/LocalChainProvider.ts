@@ -39,6 +39,7 @@ import { Provider as ZkProvider, Wallet as ZkWallet, Contract as ZkContract } fr
 
 import { derivePseudonym, deriveScopeKey } from '../identity/pseudonym.js'
 import { SignInRejected } from './MockProvider.js'
+import { runAdminTx } from './adminTxQueue.js'
 import type {
   CofferdamProvider,
   NetworkMode,
@@ -250,8 +251,14 @@ export class LocalChainProvider implements CofferdamProvider {
     const current = await this.chainProvider.getBalance(accountAddress)
     if (current >= this.config.prefundWei) return
     const topUp = this.config.prefundWei - current
-    const tx = await adminWallet.sendTransaction({ to: accountAddress, value: topUp })
-    await tx.wait()
+    // Route through the module-level admin queue so concurrent
+    // LocalChainProvider instances against the same admin EOA don't race
+    // on nonce assignment (Sepolia public RPC has eventually-consistent
+    // pending-nonce reads — see ./adminTxQueue.ts for the full rationale).
+    await runAdminTx(this.config.rpcUrl, this.chainProvider, adminWallet, async (nonce) => {
+      const tx = await adminWallet.sendTransaction({ to: accountAddress, value: topUp, nonce })
+      return tx.wait()
+    })
   }
 
   private async maybeBind(adminWallet: ZkWallet, accountAddress: string): Promise<void> {
@@ -267,8 +274,17 @@ export class LocalChainProvider implements CofferdamProvider {
     if (already) return
 
     const nullifier = await deriveDeterministicNullifier(this.config.mockUserId)
-    const tx = await receiver.bindNullifier(accountAddress, nullifier)
-    const receipt: EthersReceipt | null = await tx.wait()
+    // Same admin-queue treatment as maybePrefund: serialize + locally
+    // track the next nonce to dodge stale public-RPC reads.
+    const receipt = await runAdminTx<EthersReceipt | null>(
+      this.config.rpcUrl,
+      this.chainProvider,
+      adminWallet,
+      async (nonce) => {
+        const tx = await receiver.bindNullifier(accountAddress, nullifier, { nonce })
+        return tx.wait()
+      },
+    )
     if (!receipt || receipt.status !== 1) {
       throw new SignInRejected(
         'unknown' as SignInErrorCode,

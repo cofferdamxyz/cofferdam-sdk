@@ -1,4 +1,19 @@
-// Local-chain interactive harness for the v1/zksync contracts.
+// Interactive harness for the v1/zksync contracts. Drives the same UI + flow
+// against either of two networks, selected by the `chain` prop:
+//
+//   - chain="local"   : anvil-zksync (in-memory ZKSync Era node).
+//                       Reads VITE_LOCAL_* env vars; defaults are anvil's
+//                       public rich-wallet #0 + http://127.0.0.1:8011.
+//                       Demo amounts: 0.1 ETH per job, 0.5–1.5 ETH pre-funds.
+//
+//   - chain="testnet" : ZKSync Era Sepolia (chainId 300).
+//                       Reads VITE_TESTNET_* env vars. Defaults to the
+//                       deployed Receiver/Escrow addresses (see README §6),
+//                       Sepolia public RPC, scaled-down amounts (~100×
+//                       smaller so the admin's faucet ETH lasts more than 2
+//                       runs), clickable block-explorer links on every tx.
+//                       VITE_TESTNET_ADMIN_PRIVATE_KEY MUST be set — there's
+//                       no public default for a testnet admin.
 //
 // Three roles in a single page, each backed by its own `LocalChainProvider`:
 //
@@ -7,17 +22,16 @@
 //   - Worker    (Crew) : checks in / out, receives the settled payout
 //
 // Every on-chain action produces a row in the Activity log with a status
-// (pending → success / error), tx hash, and a one-line summary. Roles share
-// the same anvil-zksync node and `OffshoreSync{Receiver,Escrow}` deployment;
-// you see the full corporate flow land in real time.
+// (pending → success / error), tx hash, and a one-line summary.
 //
 // Notes:
-//   - The "admin private key" used to bind identities is the anvil-zksync
-//     rich wallet #0 (public). NEVER reuse this pattern outside local dev.
+//   - The "admin private key" binds identities + pre-funds role EOAs. On
+//     local mode it defaults to anvil's public rich-wallet #0; on testnet
+//     mode it MUST be supplied by the operator and must hold L2 ETH. NEVER
+//     reuse anvil's key on testnet — it's public.
 //   - The recruiter / funder / worker EOAs are deterministic from their
-//     mockUserId env vars; re-running with the same IDs against a live
-//     anvil-zksync session will reuse the same accounts (so binds are
-//     idempotent).
+//     mockUserId env vars; re-running with the same IDs reuses the same
+//     accounts (so binds are idempotent and skipped on repeat sessions).
 //   - We re-derive each role's wallet client-side after signIn() because the
 //     SDK doesn't expose a signer (yet). Tracked in TODO.md under "high-level
 //     escrow client on the SDK".
@@ -36,22 +50,96 @@ import type { SignInResponse } from '@cofferdam/sdk'
 // Env-driven config
 // ────────────────────────────────────────────────────────────────────────────
 
-const env = import.meta.env
+export type ChainTarget = 'local' | 'testnet'
 
-const CONFIG = {
-  rpcUrl: (env.VITE_LOCAL_RPC_URL as string | undefined) ?? 'http://127.0.0.1:8011',
-  chainId: Number(env.VITE_LOCAL_CHAIN_ID ?? 260),
-  receiver: (env.VITE_LOCAL_RECEIVER_ADDRESS as string | undefined) ?? '',
-  escrow: (env.VITE_LOCAL_ESCROW_ADDRESS as string | undefined) ?? '',
-  adminPrivateKey:
-    (env.VITE_LOCAL_ADMIN_PRIVATE_KEY as string | undefined) ??
-    '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
-  recruiterId: (env.VITE_LOCAL_RECRUITER_ID as string | undefined) ?? 'local-recruiter-1',
-  funderId: (env.VITE_LOCAL_FUNDER_ID as string | undefined) ?? 'local-finance-1',
-  workerId: (env.VITE_LOCAL_WORKER_ID as string | undefined) ?? 'local-worker-1',
+interface ChainConfig {
+  rpcUrl: string
+  chainId: number
+  receiver: string
+  escrow: string
+  adminPrivateKey: string
+  recruiterId: string
+  funderId: string
+  workerId: string
+  amountWei: bigint
+  prefunds: { recruiter: bigint; funder: bigint; worker: bigint }
+  label: string
+  explorerBase: string | null // null on local; full origin on testnet (e.g. https://sepolia.explorer.zksync.io)
 }
 
-const AMOUNT_WEI = 100_000_000_000_000_000n // 0.1 ETH per demo job
+// Anvil-zksync's public rich-wallet #0. Fully public, hard-coded in the
+// vendored binary — fine for local dev, NEVER use it where there's value.
+const ANVIL_RICH_WALLET_PK =
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+
+// Sepolia α-2 deploy from May 2026 — see README §6 + contracts/deployments/
+// zkSyncSepolia.json. Hard-coded as the default for the testnet demo so
+// users don't have to copy-paste addresses; can still be overridden via
+// VITE_TESTNET_*_ADDRESS if a fresh redeploy happens.
+const SEPOLIA_DEFAULTS = {
+  receiver: '0xa8F46B15F53D619584a00b91559e37233869ab5a',
+  escrow: '0x22281d75CF1d34421e5Fc58625885b46dC309723',
+} as const
+
+function buildConfig(chain: ChainTarget): ChainConfig {
+  const env = import.meta.env
+  if (chain === 'testnet') {
+    return {
+      rpcUrl:
+        (env.VITE_TESTNET_RPC_URL as string | undefined) ??
+        'https://sepolia.era.zksync.dev',
+      chainId: Number(env.VITE_TESTNET_CHAIN_ID ?? 300),
+      receiver:
+        (env.VITE_TESTNET_RECEIVER_ADDRESS as string | undefined) ??
+        SEPOLIA_DEFAULTS.receiver,
+      escrow:
+        (env.VITE_TESTNET_ESCROW_ADDRESS as string | undefined) ??
+        SEPOLIA_DEFAULTS.escrow,
+      // No default for testnet admin — there's no public-key analog of anvil's
+      // rich wallet. Empty string here surfaces a clear error in the UI before
+      // anything tries to sign.
+      adminPrivateKey: (env.VITE_TESTNET_ADMIN_PRIVATE_KEY as string | undefined) ?? '',
+      recruiterId:
+        (env.VITE_TESTNET_RECRUITER_ID as string | undefined) ?? 'sepolia-recruiter-1',
+      funderId:
+        (env.VITE_TESTNET_FUNDER_ID as string | undefined) ?? 'sepolia-finance-1',
+      workerId:
+        (env.VITE_TESTNET_WORKER_ID as string | undefined) ?? 'sepolia-worker-1',
+      // Scaled 100× smaller than local so a 0.05 ETH faucet stash covers
+      // ~25 full demo runs instead of ~2.
+      amountWei: 1_000_000_000_000_000n, // 0.001 ETH per demo job
+      prefunds: {
+        recruiter: 5_000_000_000_000_000n, // 0.005 ETH (gas only)
+        funder: 15_000_000_000_000_000n, // 0.015 ETH (covers amount + gas)
+        worker: 5_000_000_000_000_000n, // 0.005 ETH (gas only)
+      },
+      label: 'ZKSync Era Sepolia',
+      explorerBase: 'https://sepolia.explorer.zksync.io',
+    }
+  }
+  // chain === 'local'
+  return {
+    rpcUrl:
+      (env.VITE_LOCAL_RPC_URL as string | undefined) ?? 'http://127.0.0.1:8011',
+    chainId: Number(env.VITE_LOCAL_CHAIN_ID ?? 260),
+    receiver: (env.VITE_LOCAL_RECEIVER_ADDRESS as string | undefined) ?? '',
+    escrow: (env.VITE_LOCAL_ESCROW_ADDRESS as string | undefined) ?? '',
+    adminPrivateKey:
+      (env.VITE_LOCAL_ADMIN_PRIVATE_KEY as string | undefined) ?? ANVIL_RICH_WALLET_PK,
+    recruiterId:
+      (env.VITE_LOCAL_RECRUITER_ID as string | undefined) ?? 'local-recruiter-1',
+    funderId: (env.VITE_LOCAL_FUNDER_ID as string | undefined) ?? 'local-finance-1',
+    workerId: (env.VITE_LOCAL_WORKER_ID as string | undefined) ?? 'local-worker-1',
+    amountWei: 100_000_000_000_000_000n, // 0.1 ETH per demo job
+    prefunds: {
+      recruiter: 500_000_000_000_000_000n, // 0.5 ETH
+      funder: 1_500_000_000_000_000_000n, // 1.5 ETH (covers amount + gas)
+      worker: 100_000_000_000_000_000n, // 0.1 ETH (gas only)
+    },
+    label: 'anvil-zksync (local)',
+    explorerBase: null,
+  }
+}
 
 const ESCROW_ABI = [
   'function postContract(bytes32 termsHash) payable returns (uint256)',
@@ -79,25 +167,32 @@ interface RoleConfig {
   emoji: string
 }
 
-const ROLES: Record<Role, RoleConfig> = {
-  recruiter: {
-    mockUserId: CONFIG.recruiterId,
-    prefundWei: 500_000_000_000_000_000n, // 0.5 ETH
-    label: 'Recruiter (HR)',
-    emoji: '👤',
-  },
-  funder: {
-    mockUserId: CONFIG.funderId,
-    prefundWei: 1_500_000_000_000_000_000n, // 1.5 ETH (covers amount + gas)
-    label: 'Funder (Finance)',
-    emoji: '💼',
-  },
-  worker: {
-    mockUserId: CONFIG.workerId,
-    prefundWei: 100_000_000_000_000_000n, // 0.1 ETH (gas only)
-    label: 'Worker (Crew)',
-    emoji: '⚓',
-  },
+// Static role metadata (label/emoji) — the dynamic bits (mockUserId,
+// prefundWei) come from the per-mode `cfg` and are merged at render time.
+const ROLE_META: Record<Role, { label: string; emoji: string }> = {
+  recruiter: { label: 'Recruiter (HR)', emoji: '👤' },
+  funder: { label: 'Funder (Finance)', emoji: '💼' },
+  worker: { label: 'Worker (Crew)', emoji: '⚓' },
+}
+
+function buildRoles(cfg: ChainConfig): Record<Role, RoleConfig> {
+  return {
+    recruiter: {
+      mockUserId: cfg.recruiterId,
+      prefundWei: cfg.prefunds.recruiter,
+      ...ROLE_META.recruiter,
+    },
+    funder: {
+      mockUserId: cfg.funderId,
+      prefundWei: cfg.prefunds.funder,
+      ...ROLE_META.funder,
+    },
+    worker: {
+      mockUserId: cfg.workerId,
+      prefundWei: cfg.prefunds.worker,
+      ...ROLE_META.worker,
+    },
+  }
 }
 
 interface RoleState {
@@ -115,6 +210,9 @@ interface TxEntry {
   hash?: string
   error?: string
   contractId?: bigint
+  // Captured at tx creation so the activity row can render a clickable
+  // explorer link without having to know the current `chain` prop.
+  explorerBase?: string | null
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -161,9 +259,22 @@ function rid(): string {
 // Component
 // ────────────────────────────────────────────────────────────────────────────
 
-export function LocalChainDemo() {
-  const configured = CONFIG.receiver && CONFIG.escrow
-  const chain = useMemo(() => new ZkProvider(CONFIG.rpcUrl), [])
+interface LocalChainDemoProps {
+  chain: ChainTarget
+}
+
+export function LocalChainDemo({ chain }: LocalChainDemoProps) {
+  const cfg = useMemo(() => buildConfig(chain), [chain])
+  const rolesMeta = useMemo(() => buildRoles(cfg), [cfg])
+  const rpc = useMemo(() => new ZkProvider(cfg.rpcUrl), [cfg.rpcUrl])
+
+  // Configured = enough info to actually fire txs. Receiver/Escrow always
+  // have defaults on testnet (the deployed Sepolia addresses), but the
+  // adminPrivateKey has no public default — testnet operators must supply
+  // their own funded key. Local mode falls back to anvil's rich wallet.
+  const missingAdmin = !cfg.adminPrivateKey
+  const missingAddrs = !cfg.receiver || !cfg.escrow
+  const configured = !missingAddrs && !missingAdmin
 
   const [roles, setRoles] = useState<Record<Role, RoleState>>({
     recruiter: emptyRoleState(),
@@ -177,6 +288,19 @@ export function LocalChainDemo() {
     setRoles((prev) => ({ ...prev, [role]: { ...prev[role], ...patch } }))
   }, [])
 
+  // Reset role state if the chain target ever changes mid-session (defensive
+  // — today the prop is build-time-fixed, but if it ever isn't we don't want
+  // a wallet bound to network A leaking into network B's session).
+  useEffect(() => {
+    setRoles({
+      recruiter: emptyRoleState(),
+      funder: emptyRoleState(),
+      worker: emptyRoleState(),
+    })
+    setTxs([])
+    setLastContractId(null)
+  }, [chain])
+
   // Periodically refresh on-chain balances for signed-in roles.
   useEffect(() => {
     let cancelled = false
@@ -185,11 +309,11 @@ export function LocalChainDemo() {
         const addr = roles[role].session?.accountAddress
         if (!addr) continue
         try {
-          const bal = await chain.getBalance(addr)
+          const bal = await rpc.getBalance(addr)
           if (cancelled) return
           updateRole(role, { balance: bal })
         } catch {
-          /* node not up, swallow */
+          /* node not reachable, swallow */
         }
       }
     }
@@ -199,28 +323,28 @@ export function LocalChainDemo() {
       cancelled = true
       clearInterval(t)
     }
-  }, [chain, roles, updateRole])
+  }, [rpc, roles, updateRole])
 
-  // ── Sign-in flow ────────────────────────────────────────────────────────
+  // ── Sign-in flow ────────────────────────────────────────────────────
   const signIn = useCallback(
     async (role: Role) => {
       if (!configured) return
       updateRole(role, { signing: true, error: null })
-      const cfg = ROLES[role]
+      const meta = rolesMeta[role]
       const provider = new LocalChainProvider({
         scope: 'capacitor-minimal',
-        rpcUrl: CONFIG.rpcUrl,
-        chainId: CONFIG.chainId,
-        contracts: { receiver: CONFIG.receiver, escrow: CONFIG.escrow },
-        mockUserId: cfg.mockUserId,
-        adminPrivateKey: CONFIG.adminPrivateKey,
-        prefundWei: cfg.prefundWei,
+        rpcUrl: cfg.rpcUrl,
+        chainId: cfg.chainId,
+        contracts: { receiver: cfg.receiver, escrow: cfg.escrow },
+        mockUserId: meta.mockUserId,
+        adminPrivateKey: cfg.adminPrivateKey,
+        prefundWei: meta.prefundWei,
       })
-      const tx = newTx(setTxs, `${cfg.emoji} sign-in: ${cfg.label}`)
+      const tx = newTx(setTxs, `${meta.emoji} sign-in: ${meta.label}`, cfg.explorerBase)
       try {
         const session = await provider.signIn({})
-        const pk = await deriveDeterministicPk(cfg.mockUserId)
-        const wallet = new ZkWallet(pk, chain)
+        const pk = await deriveDeterministicPk(meta.mockUserId)
+        const wallet = new ZkWallet(pk, rpc)
         updateRole(role, { session, wallet, signing: false })
         tx.success()
       } catch (err) {
@@ -229,21 +353,30 @@ export function LocalChainDemo() {
         tx.error(msg)
       }
     },
-    [chain, configured, updateRole],
+    [cfg, rolesMeta, rpc, configured, updateRole],
   )
 
-  // ── Escrow actions ──────────────────────────────────────────────────────
+  // ── Escrow actions ───────────────────────────────────────────────────
   const postSelfFunded = useCallback(async () => {
     const wallet = roles.recruiter.wallet
     if (!wallet) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
     const termsHash = keccak256(toUtf8Bytes(`self-${Date.now()}`))
-    const tx = newTx(setTxs, `🧾 postContract (self-funded, ${fmtEth(AMOUNT_WEI)})`)
+    const tx = newTx(
+      setTxs,
+      `🧾 postContract (self-funded, ${fmtEth(cfg.amountWei)})`,
+      cfg.explorerBase,
+    )
     try {
-      const sent = await escrow.postContract(termsHash, { value: AMOUNT_WEI })
+      const sent = await escrow.postContract(termsHash, { value: cfg.amountWei })
       tx.setHash(sent.hash)
       const receipt = await sent.wait()
-      const cid = extractContractId(escrow.interface, receipt.logs, 'ContractPosted')
+      const cid = extractContractId(
+        escrow.interface,
+        receipt.logs,
+        'ContractPosted',
+        cfg.escrow,
+      )
       if (cid) {
         setLastContractId(cid)
         tx.successWithContract(cid)
@@ -253,23 +386,29 @@ export function LocalChainDemo() {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet])
+  }, [roles.recruiter.wallet, cfg])
 
   const postIntent = useCallback(async () => {
     const wallet = roles.recruiter.wallet
     const funderAddr = roles.funder.session?.accountAddress
     if (!wallet || !funderAddr) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
     const termsHash = keccak256(toUtf8Bytes(`intent-${Date.now()}`))
     const tx = newTx(
       setTxs,
-      `🧾 postContractIntent (${fmtEth(AMOUNT_WEI)} → ${shortAddr(funderAddr)})`,
+      `🧾 postContractIntent (${fmtEth(cfg.amountWei)} → ${shortAddr(funderAddr)})`,
+      cfg.explorerBase,
     )
     try {
-      const sent = await escrow.postContractIntent(termsHash, AMOUNT_WEI, funderAddr)
+      const sent = await escrow.postContractIntent(termsHash, cfg.amountWei, funderAddr)
       tx.setHash(sent.hash)
       const receipt = await sent.wait()
-      const cid = extractContractId(escrow.interface, receipt.logs, 'ContractDrafted')
+      const cid = extractContractId(
+        escrow.interface,
+        receipt.logs,
+        'ContractDrafted',
+        cfg.escrow,
+      )
       if (cid) {
         setLastContractId(cid)
         tx.successWithContract(cid)
@@ -279,29 +418,37 @@ export function LocalChainDemo() {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.funder.session?.accountAddress])
+  }, [roles.recruiter.wallet, roles.funder.session?.accountAddress, cfg])
 
   const fundContract = useCallback(async () => {
     const wallet = roles.funder.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
-    const tx = newTx(setTxs, `💸 fundContract #${lastContractId} (${fmtEth(AMOUNT_WEI)})`)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const tx = newTx(
+      setTxs,
+      `💸 fundContract #${lastContractId} (${fmtEth(cfg.amountWei)})`,
+      cfg.explorerBase,
+    )
     try {
-      const sent = await escrow.fundContract(lastContractId, { value: AMOUNT_WEI })
+      const sent = await escrow.fundContract(lastContractId, { value: cfg.amountWei })
       tx.setHash(sent.hash)
       await sent.wait()
       tx.successWithContract(lastContractId)
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.funder.wallet, lastContractId])
+  }, [roles.funder.wallet, lastContractId, cfg])
 
   const awardWorker = useCallback(async () => {
     const wallet = roles.recruiter.wallet
     const workerAddr = roles.worker.session?.accountAddress
     if (!wallet || !workerAddr || lastContractId == null) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
-    const tx = newTx(setTxs, `🏷  awardContract #${lastContractId} → ${shortAddr(workerAddr)}`)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const tx = newTx(
+      setTxs,
+      `🏷  awardContract #${lastContractId} → ${shortAddr(workerAddr)}`,
+      cfg.explorerBase,
+    )
     try {
       const sent = await escrow.awardContract(lastContractId, workerAddr)
       tx.setHash(sent.hash)
@@ -310,13 +457,13 @@ export function LocalChainDemo() {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.worker.session?.accountAddress, lastContractId])
+  }, [roles.recruiter.wallet, roles.worker.session?.accountAddress, lastContractId, cfg])
 
   const checkIn = useCallback(async () => {
     const wallet = roles.worker.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
-    const tx = newTx(setTxs, `🕒 checkIn #${lastContractId}`)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const tx = newTx(setTxs, `🕒 checkIn #${lastContractId}`, cfg.explorerBase)
     try {
       const sent = await escrow.checkIn(lastContractId)
       tx.setHash(sent.hash)
@@ -325,13 +472,13 @@ export function LocalChainDemo() {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId])
+  }, [roles.worker.wallet, lastContractId, cfg])
 
   const checkOut = useCallback(async () => {
     const wallet = roles.worker.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
-    const tx = newTx(setTxs, `🕔 checkOut #${lastContractId}`)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const tx = newTx(setTxs, `🕔 checkOut #${lastContractId}`, cfg.explorerBase)
     try {
       const sent = await escrow.checkOut(lastContractId)
       tx.setHash(sent.hash)
@@ -340,15 +487,15 @@ export function LocalChainDemo() {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId])
+  }, [roles.worker.wallet, lastContractId, cfg])
 
   const settle = useCallback(async () => {
     // Any signed-in wallet can call settle. We use the recruiter for parity
     // with the integration test; in production the Cofferdam paymaster bot does.
     const wallet = roles.recruiter.wallet ?? roles.funder.wallet ?? roles.worker.wallet
     if (!wallet || lastContractId == null) return
-    const escrow = new ZkContract(CONFIG.escrow, ESCROW_ABI as any, wallet)
-    const tx = newTx(setTxs, `✅ settle #${lastContractId}`)
+    const escrow = new ZkContract(cfg.escrow, ESCROW_ABI as any, wallet)
+    const tx = newTx(setTxs, `✅ settle #${lastContractId}`, cfg.explorerBase)
     try {
       const sent = await escrow.settle(lastContractId)
       tx.setHash(sent.hash)
@@ -357,51 +504,103 @@ export function LocalChainDemo() {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.funder.wallet, roles.worker.wallet, lastContractId])
+  }, [roles.recruiter.wallet, roles.funder.wallet, roles.worker.wallet, lastContractId, cfg])
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────
+  const title = chain === 'testnet' ? 'Cofferdam Sepolia Demo' : 'Cofferdam Local-Chain Demo'
   if (!configured) {
     return (
       <main className="container container-wide">
-        <h1>Cofferdam Local-Chain Demo</h1>
-        <p className="lead">
-          Missing <code>VITE_LOCAL_RECEIVER_ADDRESS</code> /{' '}
-          <code>VITE_LOCAL_ESCROW_ADDRESS</code> in <code>.env.local</code>.
-        </p>
-        <p className="lead">
-          Run <code>yarn deploy:v1-zksync:local</code> in the contracts repo
-          first, then paste the addresses it printed into{' '}
-          <code>examples/capacitor-minimal/.env.local</code> (see{' '}
-          <code>.env.example</code>) and restart <code>yarn dev:local-chain</code>.
-        </p>
+        <h1>{title}</h1>
+        {missingAddrs && chain === 'local' && (
+          <p className="lead">
+            Missing <code>VITE_LOCAL_RECEIVER_ADDRESS</code> /{' '}
+            <code>VITE_LOCAL_ESCROW_ADDRESS</code> in <code>.env.local</code>.
+            Run <code>yarn deploy:v1-zksync:local</code> in the contracts repo
+            first, then paste the addresses it printed into{' '}
+            <code>examples/capacitor-minimal/.env.local</code> (see{' '}
+            <code>.env.example</code>) and restart <code>yarn dev:local-chain</code>.
+          </p>
+        )}
+        {missingAddrs && chain === 'testnet' && (
+          <p className="lead">
+            Missing <code>VITE_TESTNET_RECEIVER_ADDRESS</code> /{' '}
+            <code>VITE_TESTNET_ESCROW_ADDRESS</code>. The defaults baked into
+            this demo point at the May-2026 Sepolia deploy; if you've
+            overridden them in <code>.env.local</code> they must both be set.
+          </p>
+        )}
+        {missingAdmin && chain === 'testnet' && (
+          <p className="lead">
+            Missing <code>VITE_TESTNET_ADMIN_PRIVATE_KEY</code>. Sepolia mode
+            requires a funded EOA that owns the deployed{' '}
+            <code>OffshoreSyncReceiver</code> — it signs <code>bindNullifier</code>{' '}
+            for new sign-ins and pays gas + pre-fund transfers. Add it to{' '}
+            <code>.env.local</code> and restart Vite. The deployer key from{' '}
+            <code>contracts/.env</code> is the one you want; keep it topped up
+            with ~0.05 L2 ETH from a Sepolia faucet.
+          </p>
+        )}
       </main>
     )
   }
 
+  const lead =
+    chain === 'testnet'
+      ? `Three roles, one ZKSync Sepolia deployment. Sign each role in, then drive the corporate flow on-chain. Demo amounts are scaled 100× smaller (${fmtEth(cfg.amountWei)} per job) so the admin's faucet ETH lasts.`
+      : 'Three roles, one anvil-zksync node. Sign each role in, then drive the corporate flow on-chain. Watch the activity log + your node terminal side-by-side.'
+
   return (
     <main className="container container-wide">
-      <h1>Cofferdam Local-Chain Demo</h1>
-      <p className="lead">
-        Three roles, one anvil-zksync node. Sign each role in, then drive the
-        corporate flow on-chain. Watch the activity log + your node terminal
-        side-by-side.
-      </p>
+      <h1>
+        {title}
+        {chain === 'testnet' && (
+          <span className="chain-badge" title="ZKSync Era Sepolia (chainId 300)">
+            {' '}testnet
+          </span>
+        )}
+      </h1>
+      <p className="lead">{lead}</p>
       <div className="chain-meta">
         <div>
-          <strong>RPC:</strong> <code>{CONFIG.rpcUrl}</code> · chain {CONFIG.chainId}
+          <strong>Network:</strong> {cfg.label} · <strong>RPC:</strong>{' '}
+          <code>{cfg.rpcUrl}</code> · chain {cfg.chainId}
         </div>
         <div>
-          <strong>Receiver:</strong> <code>{shortAddr(CONFIG.receiver)}</code>
+          <strong>Receiver:</strong>{' '}
+          {cfg.explorerBase ? (
+            <a
+              href={`${cfg.explorerBase}/address/${cfg.receiver}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <code>{shortAddr(cfg.receiver)}</code>
+            </a>
+          ) : (
+            <code>{shortAddr(cfg.receiver)}</code>
+          )}
           {' · '}
-          <strong>Escrow:</strong> <code>{shortAddr(CONFIG.escrow)}</code>
+          <strong>Escrow:</strong>{' '}
+          {cfg.explorerBase ? (
+            <a
+              href={`${cfg.explorerBase}/address/${cfg.escrow}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <code>{shortAddr(cfg.escrow)}</code>
+            </a>
+          ) : (
+            <code>{shortAddr(cfg.escrow)}</code>
+          )}
         </div>
       </div>
 
       <div className="role-grid">
-        {(Object.keys(ROLES) as Role[]).map((role) => (
+        {(Object.keys(rolesMeta) as Role[]).map((role) => (
           <RolePanel
             key={role}
             role={role}
+            meta={rolesMeta[role]}
             state={roles[role]}
             onSignIn={() => signIn(role)}
           />
@@ -480,7 +679,19 @@ export function LocalChainDemo() {
               {t.contractId != null && (
                 <span className="activity-cid">contract #{t.contractId.toString()}</span>
               )}
-              {t.hash && <code className="activity-hash">{shortAddr(t.hash)}</code>}
+              {t.hash &&
+                (t.explorerBase ? (
+                  <a
+                    className="activity-hash"
+                    href={`${t.explorerBase}/tx/${t.hash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <code>{shortAddr(t.hash)}</code>
+                  </a>
+                ) : (
+                  <code className="activity-hash">{shortAddr(t.hash)}</code>
+                ))}
               {t.error && <span className="activity-error">{t.error}</span>}
             </li>
           ))}
@@ -496,21 +707,21 @@ export function LocalChainDemo() {
 
 interface RolePanelProps {
   role: Role
+  meta: RoleConfig
   state: RoleState
   onSignIn: () => void
 }
 
-function RolePanel({ role, state, onSignIn }: RolePanelProps) {
-  const cfg = ROLES[role]
+function RolePanel({ meta, state, onSignIn }: RolePanelProps) {
   const signedIn = state.session != null
   return (
     <div className={`role-panel ${signedIn ? 'role-panel-on' : ''}`}>
       <div className="role-header">
-        <span className="role-emoji">{cfg.emoji}</span>
+        <span className="role-emoji">{meta.emoji}</span>
         <div>
-          <div className="role-label">{cfg.label}</div>
+          <div className="role-label">{meta.label}</div>
           <div className="role-id">
-            id: <code>{cfg.mockUserId}</code>
+            id: <code>{meta.mockUserId}</code>
           </div>
         </div>
       </div>
@@ -531,7 +742,7 @@ function RolePanel({ role, state, onSignIn }: RolePanelProps) {
         </div>
       ) : (
         <button className="role-signin" onClick={onSignIn} disabled={state.signing}>
-          {state.signing ? 'Signing in…' : `Sign in as ${cfg.label}`}
+          {state.signing ? 'Signing in…' : `Sign in as ${meta.label}`}
         </button>
       )}
       {state.error && <div className="role-error">{state.error}</div>}
@@ -555,9 +766,13 @@ interface TxHandle {
   error(msg: string): void
 }
 
-function newTx(setTxs: React.Dispatch<React.SetStateAction<TxEntry[]>>, label: string): TxHandle {
+function newTx(
+  setTxs: React.Dispatch<React.SetStateAction<TxEntry[]>>,
+  label: string,
+  explorerBase: string | null,
+): TxHandle {
   const id = rid()
-  setTxs((prev) => [{ id, label, status: 'pending' }, ...prev])
+  setTxs((prev) => [{ id, label, status: 'pending', explorerBase }, ...prev])
   const patch = (p: Partial<TxEntry>) =>
     setTxs((prev) => prev.map((t) => (t.id === id ? { ...t, ...p } : t)))
   return {
@@ -572,11 +787,12 @@ function extractContractId(
   iface: Interface,
   logs: ReadonlyArray<{ topics: ReadonlyArray<string>; data: string; address: string }>,
   eventName: 'ContractDrafted' | 'ContractPosted',
+  escrowAddress: string,
 ): bigint | null {
   const ev = iface.getEvent(eventName)
   if (!ev) return null
   const topic = ev.topicHash
-  const target = CONFIG.escrow.toLowerCase()
+  const target = escrowAddress.toLowerCase()
   for (const l of logs) {
     if (l.topics[0] !== topic) continue
     if (l.address.toLowerCase() !== target) continue

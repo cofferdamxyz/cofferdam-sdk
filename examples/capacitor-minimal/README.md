@@ -199,6 +199,53 @@ The demo's deterministic-EOA derivation means the same `VITE_LOCAL_RECRUITER_ID=
 - **anvil-zksync was restarted (chain wiped)**: just hit the page again, sign in, everything works — the bind happens fresh.
 - **anvil-zksync is still up from a previous session**: the user is already bound, so the bind tx is skipped silently (the provider checks `isAccountBound` first). To get fresh users, bump the suffix in `.env.local` (`local-recruiter-2`, etc.) or restart the node.
 
+### Switching to ZKSync Sepolia (testnet)
+
+Same UI + flow, pointed at a real public testnet. Useful for validating the flow against a public RPC, sharing the activity log with someone outside your machine, or testing internal-track Cofferdam mobile builds against a non-ephemeral chain.
+
+**Pre-deployed Sepolia addresses (α-2):**
+
+| Contract | Address | Explorer |
+|---|---|---|
+| `OffshoreSyncReceiver` | `0xa8F46B15F53D619584a00b91559e37233869ab5a` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0xa8F46B15F53D619584a00b91559e37233869ab5a) |
+| `OffshoreSyncEscrow` | `0x22281d75CF1d34421e5Fc58625885b46dC309723` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0x22281d75CF1d34421e5Fc58625885b46dC309723) |
+| `Verifier_vc_and_disclose` (Phase 0) | `0xf23537eF06fC1283F5be80676418b71aEd81b7E5` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0xf23537eF06fC1283F5be80676418b71aEd81b7E5) |
+
+Owner: `0xfa4D920d5592289A1A0F73CA49D626EF8FE4D695` (deployer EOA; will hand off to LLC Safe for production). The Receiver/Escrow addresses are baked into the demo as defaults — you only need to set them in `.env.local` if you've redeployed.
+
+**Switch the demo to Sepolia:**
+
+1. Set `VITE_COFFERDAM_NETWORK=sepolia-testnet` in `.env.local`.
+2. Copy the `VITE_TESTNET_*` block from [`.env.example`](./.env.example) into `.env.local` and fill in `VITE_TESTNET_ADMIN_PRIVATE_KEY` with a Sepolia-funded key that owns the deployed Receiver. **Do not commit `.env.local`** once this is set — it's a real private key with real testnet ETH.
+3. Run with the dedicated script:
+   ```bash
+   yarn workspace @cofferdam/example-capacitor-minimal dev:sepolia-testnet
+   # → http://localhost:5173 — title says "Cofferdam Sepolia Demo · testnet"
+   ```
+
+The page renders the same three-role click-through, but with:
+
+- A `testnet` badge next to the title
+- Receiver / Escrow shown as **clickable explorer links**
+- Every tx hash in the activity log linked to its Sepolia explorer page
+- Demo amounts scaled **100× smaller** (0.001 ETH per job vs 0.1 ETH locally), so a 0.05 ETH faucet stash covers ~25 full demo runs instead of ~2
+
+**Admin-key budget guidance.** Each full demo run costs the admin EOA roughly:
+
+- 3 × `bindNullifier` txs on first sign-in (~0.0003 ETH gas each, skipped on repeat sessions because identities are sticky)
+- 3 × pre-fund transfers (0.005 / 0.015 / 0.005 = 0.025 ETH) — also skipped on repeat sessions if the role's deterministic EOA already has balance
+- ~7 × user-EOA txs paid by the role wallets, not by admin (the admin only pre-funds once)
+
+So the **first** run costs admin ~0.026 ETH; subsequent runs against the same role IDs cost ~0 (admin doesn't sign anything). Bump the per-role IDs in `VITE_TESTNET_*_ID` to fork off "fresh users" on demand.
+
+**Tail script auto-detects the mode.** With `VITE_COFFERDAM_NETWORK=sepolia-testnet` in `.env.local`, `yarn tail` reads the `VITE_TESTNET_*` namespace and points at Sepolia RPC automatically. Sepolia blocks are busy — pass `--backfill=0` if you only care about your own new txs:
+
+```bash
+yarn workspace @cofferdam/example-capacitor-minimal tail --backfill=0
+```
+
+**Skip the local node entirely.** Terminal 1 (`yarn node:start`) and Terminal 2 (`deploy:v1-zksync:local`) are not needed for Sepolia mode — only the Vite dev server (`dev:sepolia-testnet`) and tail are required.
+
 ### Troubleshooting
 
 - **"Missing VITE_LOCAL_RECEIVER_ADDRESS"** → you haven't pasted the deploy output into `.env.local` (or didn't restart Vite after editing it).
