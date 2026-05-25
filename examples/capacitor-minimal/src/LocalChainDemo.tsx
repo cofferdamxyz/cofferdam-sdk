@@ -36,7 +36,7 @@
 //     SDK doesn't expose a signer (yet). Tracked in TODO.md under "high-level
 //     escrow client on the SDK".
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Provider as ZkProvider,
   Wallet as ZkWallet,
@@ -311,29 +311,46 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     setLastContractId(null)
   }, [chain])
 
-  // Periodically refresh on-chain balances for signed-in roles.
+  // Live balance refresher.
+  //
+  // Two paths feed it:
+  //   1. A 4-second `setInterval` safety net — picks up changes caused by
+  //      txs we *didn't* initiate from this tab (e.g. the worker's balance
+  //      bumping when another role calls `settle`).
+  //   2. Direct invocation from each tx handler's success path — catches
+  //      our own txs within milliseconds of confirmation, so the UI feels
+  //      truly live.
+  //
+  // We read `roles` from a ref so the polling effect doesn't tear down
+  // every time a balance update lands. Earlier versions listed `roles`
+  // in the effect deps, which created a feedback loop where each balance
+  // write cancelled the interval before the next role finished refreshing.
+  const rolesRef = useRef(roles)
   useEffect(() => {
-    let cancelled = false
-    const refresh = async () => {
-      for (const role of Object.keys(roles) as Role[]) {
-        const addr = roles[role].session?.accountAddress
-        if (!addr) continue
+    rolesRef.current = roles
+  }, [roles])
+
+  const refreshBalances = useCallback(async () => {
+    const current = rolesRef.current
+    await Promise.all(
+      (Object.keys(current) as Role[]).map(async (role) => {
+        const addr = current[role].session?.accountAddress
+        if (!addr) return
         try {
           const bal = await rpc.getBalance(addr)
-          if (cancelled) return
           updateRole(role, { balance: bal })
         } catch {
           /* node not reachable, swallow */
         }
-      }
-    }
-    refresh()
-    const t = setInterval(refresh, 4000)
-    return () => {
-      cancelled = true
-      clearInterval(t)
-    }
-  }, [rpc, roles, updateRole])
+      }),
+    )
+  }, [rpc, updateRole])
+
+  useEffect(() => {
+    void refreshBalances()
+    const t = setInterval(() => void refreshBalances(), 4000)
+    return () => clearInterval(t)
+  }, [refreshBalances])
 
   // ── Sign-in flow ────────────────────────────────────────────────────
   const signIn = useCallback(
@@ -394,10 +411,11 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
       })
       setLastContractId(contractId)
       tx.successWithContract(contractId)
+      void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, escrowFor, cfg.amountWei, cfg.explorerBase])
+  }, [roles.recruiter.wallet, escrowFor, cfg.amountWei, cfg.explorerBase, refreshBalances])
 
   const postIntent = useCallback(async () => {
     const wallet = roles.recruiter.wallet
@@ -421,10 +439,18 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
       )
       setLastContractId(contractId)
       tx.successWithContract(contractId)
+      void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, designatedFunderAddress, escrowFor, cfg.amountWei, cfg.explorerBase])
+  }, [
+    roles.recruiter.wallet,
+    designatedFunderAddress,
+    escrowFor,
+    cfg.amountWei,
+    cfg.explorerBase,
+    refreshBalances,
+  ])
 
   const fundContract = useCallback(async () => {
     const wallet = roles.funder.wallet
@@ -440,6 +466,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
         onSent: (h) => tx.setHash(h),
       })
       tx.successWithContract(lastContractId)
+      void refreshBalances()
       // Bump the funder up the recent list so re-running with a fresh
       // recruiter ID surfaces them first.
       const addr = roles.funder.session?.accountAddress
@@ -455,6 +482,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     cfg.amountWei,
     cfg.explorerBase,
     funderPicker,
+    refreshBalances,
   ])
 
   const awardWorker = useCallback(async () => {
@@ -472,6 +500,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
         onSent: (h) => tx.setHash(h),
       })
       tx.successWithContract(lastContractId)
+      void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
@@ -481,6 +510,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     lastContractId,
     escrowFor,
     cfg.explorerBase,
+    refreshBalances,
   ])
 
   const checkIn = useCallback(async () => {
@@ -491,10 +521,11 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     try {
       await escrow.checkIn(lastContractId, { onSent: (h) => tx.setHash(h) })
       tx.successWithContract(lastContractId)
+      void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase])
+  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase, refreshBalances])
 
   const checkOut = useCallback(async () => {
     const wallet = roles.worker.wallet
@@ -504,10 +535,11 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     try {
       await escrow.checkOut(lastContractId, { onSent: (h) => tx.setHash(h) })
       tx.successWithContract(lastContractId)
+      void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase])
+  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase, refreshBalances])
 
   const settle = useCallback(async () => {
     // Any signed-in wallet can call settle. We use the recruiter for parity
@@ -519,6 +551,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     try {
       await escrow.settle(lastContractId, { onSent: (h) => tx.setHash(h) })
       tx.successWithContract(lastContractId)
+      void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
@@ -529,6 +562,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     lastContractId,
     escrowFor,
     cfg.explorerBase,
+    refreshBalances,
   ])
 
   // ── Render ─────────────────────────────────────────────────────────────
