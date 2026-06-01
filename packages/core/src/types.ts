@@ -88,7 +88,8 @@ export interface CofferdamConfig {
  * Provider abstraction. Concrete implementations:
  * - MockProvider          — α-1 (this file's package)
  * - LocalChainProvider    — α-2 (talks to anvil-zksync via viem)
- * - TestnetProvider       — α-3 (ZKSync Era Sepolia + Celo Alfajores)
+ * - TestnetProvider       — α-3 (ZKSync Era Sepolia; single-chain post rev-6,
+ *                                Celo Alfajores removed from production path)
  * - ProductionProvider    — β  (mainnet + real Cofferdam mobile app deep-link)
  */
 export interface CofferdamProvider {

@@ -102,7 +102,7 @@ export const mockProfiles: Record<MockProfileName, MockProfile> = {
    * Verified user but OFAC-flagged. Useful for testing compliance UI:
    * the app receives a `verified: true` response with `ofacClear: false`
    * in `verifiedClaims`, and is responsible for surfacing the appropriate
-   * sanctions-screening flow (see Cofferdam/README.md §6).
+   * sanctions-screening flow (see cofferdam-app/ARCHITECTURE.md §6).
    *
    * Country code 'XX' is the ISO-3166 alpha-2 user-assigned range — the
    * SDK does not attempt to resolve it, and this profile pairs naturally

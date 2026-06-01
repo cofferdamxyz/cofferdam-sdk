@@ -15,11 +15,15 @@
 //
 //   3. (Optional) Compute a deterministic nullifier from `mockUserId` and
 //      call `OffshoreSyncReceiver.bindNullifier(account, nullifier)` from
-//      the admin key — this simulates the future α-3 LayerZero delivery or
-//      v2 Cofferdam-TEE attestation. The admin key NEVER exists in the
-//      client in production; binding is performed by the LZ DVN network
-//      (α-3) or the Cofferdam TEE service (v2). See cofferdam-sdk/README.md
-//      §2.4 + contracts/v1/zksync/README.md.
+//      the admin key — this simulates the production v2 path. The admin
+//      key NEVER exists in the client in production; production binding
+//      goes through the cofferdam-prover Cloudflare Container (produces
+//      Groth16 proof) + cofferdam-attester Worker (signs the bind message
+//      against `v2/self/SelfAttesterRegistry`-registered key) + the user's
+//      AA tx submitting to `v2/self/NullifierRegistry.bindNullifier`. Full
+//      flow in cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3. Legacy α-2 / α-3
+//      LayerZero ingress (`OffshoreSyncReceiver._lzReceive`) remains
+//      deployed on-chain but is not the production path post-rev-6.
 //
 //   4. Derive `appPseudonym = HMAC(scopeSalt, accountAddress)` and return a
 //      SignInResponse with the on-chain address.
@@ -97,9 +101,11 @@ export interface LocalChainProviderConfig {
 
   /**
    * Receiver-owner private key. If provided, `signIn()` will bind the user's
-   * derived account on-chain (simulating the future α-3 LZ delivery or v2
-   * TEE attestation). Without it, binding is the caller's responsibility
-   * and `signIn()` just returns an unbound address.
+   * derived account on-chain (simulating the production v2 attester flow:
+   * cofferdam-prover Container → cofferdam-attester Worker →
+   * NullifierRegistry.bindNullifier on ZKSync Era). Without it, binding is
+   * the caller's responsibility and `signIn()` just returns an unbound
+   * address.
    *
    * Production-deployed clients NEVER hold this key. It exists only to let
    * local PoC flows exercise the full happy path without orchestrating a

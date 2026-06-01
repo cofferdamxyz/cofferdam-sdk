@@ -6,7 +6,7 @@
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)]()
 [![Maintained by](https://img.shields.io/badge/maintained%20by-OffshoreSync%20LLC-0a66c2.svg)](https://offshoresync.com)
 
-`cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/OffshoreSync/Cofferdam) — an open-source Web3 wallet and identity vault for the maritime industry, published by OffshoreSync LLC. The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, ZKSync Era, LayerZero, or Cloudflare Durable Objects.
+`cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/OffshoreSync/Cofferdam) — a horizontally-scalable, open-source Web3 SDK + companion app for identity, end-to-end-encrypted messaging, verifiable credentials, and on-chain corporate payments, published by OffshoreSync LLC. Maritime is the first vertical pilot; the architecture is sector-neutral (see `@/Users/hoff/OffshoreSync/STRATEGY.md`). The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, ZKSync Era native account abstraction, Cloudflare Containers, or Workers AI.
 
 > "Sign in with Cofferdam" is to maritime-grade identity what "Sign in with Apple" is to email-grade identity. The user owns their keys. The app gets a verified, sybil-resistant, cryptographically-anchored identity. Nobody hands plaintext data to anyone.
 
@@ -66,7 +66,8 @@ Consumer app calls cofferdam.signIn({ scope, ...policy })
              - Self verification is optional, can happen later.
            * policy.enforceSelfBeforeAccount = true (STRICT, e.g. a banking app):
              - Run Self.xyz NFC passport flow first.
-             - Wait for LayerZero V2 callback confirming nullifier bound on ZKSync Era.
+             - Wait for v2 NullifierRegistry.bindNullifier confirmation
+               on ZKSync Era (single-chain, ~seconds; no LayerZero hop).
              - ONLY THEN deploy the smart account.
        │
        ▼
@@ -124,10 +125,10 @@ This is the **single most important policy decision** in the SDK and deserves it
 - This is the right policy for **social, content, and marketplace apps** where blocking signup on a 5-minute passport scan kills conversion.
 
 **`enforceSelfBeforeAccount: true`** (STRICT):
-- The smart account is **NOT deployed** until the Self.xyz Celo verification has happened AND the LayerZero V2 callback has bound the nullifier to the (future) account on ZKSync Era.
+- The smart account is **NOT deployed** until the Self.xyz passport flow has completed AND the v2 `NullifierRegistry.bindNullifier` tx has confirmed on ZKSync Era (single-chain, paymaster-sponsored; no LayerZero hop in production post-rev-6).
 - The user cannot sign in to the consumer app at all without a completed Self verification.
 - This is the right policy for **regulated apps** — banking, large-value financial flows, government-adjacent services — where the consumer cannot afford an unverified-account state.
-- Trade-off: the onboarding flow becomes ~5 minutes (NFC + TEE proof + LZ confirmation), and the user needs an NFC-equipped phone with a valid biometric passport.
+- Trade-off: the onboarding flow becomes ~1–2 minutes (NFC + Cloudflare Container Groth16 prove + single ZKSync bind tx), and the user needs an NFC-equipped phone with a valid biometric passport.
 
 The SDK exposes both options as a simple boolean flag on the `signIn` call. **OffshoreSync uses `false`.** A maritime banking app would use `true`.
 
@@ -168,7 +169,7 @@ For clarity — and so consumer apps can confidently expose these surfaces to un
 
 #### Inline Self prompt UX
 
-When a callsite trigger fires for an unverified user, the SDK does NOT throw an error. It deep-links the user into the Cofferdam app's Self verification flow, runs the NFC passport scan, waits for the LayerZero V2 callback to bind the nullifier on ZKSync Era, and *then* completes the original SDK call. From the consumer app's perspective the call simply takes longer the first time; from the user's perspective they get a single, contextual *"Verify to continue with [feature]"* prompt explaining why the verification is needed.
+When a callsite trigger fires for an unverified user, the SDK does NOT throw an error. It deep-links the user into the Cofferdam app's Self verification flow, runs the NFC passport scan, ships the encrypted passport bytes to the `cofferdam-prover` Cloudflare Container, waits for the v2 `NullifierRegistry.bindNullifier` tx to confirm on ZKSync Era (single-chain, ~seconds), and *then* completes the original SDK call. From the consumer app's perspective the call simply takes longer the first time; from the user's perspective they get a single, contextual *"Verify to continue with [feature]"* prompt explaining why the verification is needed.
 
 ```ts
 // Consumer-app code is identical whether the user is verified or not:
@@ -178,7 +179,8 @@ await cofferdam.payments.openOffRamp({ amount: 100, currency: 'BRL' })
 //   1. Checks: is the user verified?
 //   2. If yes → opens the off-ramp picker (country-routed via Self claims).
 //   3. If no  → opens the Cofferdam app, runs Self NFC flow, waits for the
-//              LayerZero callback, THEN opens the off-ramp picker.
+//              v2 NullifierRegistry bind tx to confirm on ZKSync Era, THEN
+//              opens the off-ramp picker.
 //
 // The consumer app sees a single Promise resolution either way.
 ```
@@ -337,7 +339,8 @@ const txHash = await cofferdam.signAndSendTx({
   data:        '0x…',
   value:       0n,
   description: 'Accept job contract #1234 with Acme Drilling',
-  chain:       'zksync-era',     // 'zksync-era' | 'celo'
+  chain:       'zksync-era',     // 'zksync-era' is the production rail; legacy 'celo'
+                                  // remains routable for read-only / archival flows.
   sponsorship: 'auto',           // 'auto' | 'self' | 'none'
 })
 
@@ -373,9 +376,11 @@ Each consumer app registers, at integration-onboarding time, the document catego
 await cofferdam.scope.registerDocumentCategories([
   {
     category: 'maritime-certificate',
-    parser:   'gemini-vision',
-    schema:   'stcw-certificate-v1',     // pre-registered Cofferdam schema,
-                                          // OR an inline custom schema object
+    parser:   'workers-ai',              // backed by @cf/google/gemma-4-26b-a4b-it;
+                                          // override per call with `model: '...'`
+    prompt:   maritimeCertificatePrompt, // your domain prompt (e.g. OffshoreSync's
+                                          // syncai/geminiService.js STCW prompt)
+    schema:   stcwCertificateSchema,     // your Zod schema for the structured fields
     display:  {
       // Optional: tells the Cofferdam app how to render this category in
       // its unified Vault inbox. Falls back to a generic key/value renderer.
@@ -387,19 +392,20 @@ await cofferdam.scope.registerDocumentCategories([
   },
   {
     category: 'job-contract',
-    parser:   'gemini-vision',
-    schema:   'maritime-job-contract-v1',
+    parser:   'workers-ai',
+    prompt:   jobContractPrompt,
+    schema:   jobContractSchema,
     display:  { title: 'Contract #${contractId}', subtitle: '${vessel}' },
   },
   {
     category: 'raw-document',
-    parser:   'none',                     // no Gemini Vision; blob + thumbnail only
+    parser:   'none',                     // no Workers AI call; blob + thumbnail only
     display:  { title: '${filename}', subtitle: 'Personal document' },
   },
 ])
 ```
 
-A consumer app that doesn't want ANY parsing — e.g. a notary app, a medical-record vault, a legal-correspondence archive — registers all its categories with `parser: 'none'`. Cofferdam stores the encrypted blob + thumbnail and never invokes Gemini Vision. The Cofferdam Vault UI renders a generic document card.
+A consumer app that doesn't want ANY parsing — e.g. a notary app, a medical-record vault, a legal-correspondence archive — registers all its categories with `parser: 'none'`. Cofferdam stores the encrypted blob + thumbnail and never invokes Workers AI. The Cofferdam Vault UI renders a generic document card.
 
 #### 4.4.2 Upload a document
 
@@ -502,8 +508,9 @@ const plaintext = await decrypt(blob, key)
 
 #### 4.4.6 Notes for consumer apps
 
-- **Parser config is per scope, not per upload.** You can't change the parser dynamically per-document — register all your categories upfront. This keeps the TEE attestation surface stable + auditable.
-- **`parser: 'none'` is a first-class option.** If your app stores sensitive documents you don't want Gemini Vision touching (medical, legal, personal), register the category with no parser. Cofferdam stores the encrypted blob + thumbnail with zero plaintext exposure.
+- **Parser config is per scope, not per upload.** You can't change the parser dynamically per-document — register all your categories upfront. This keeps the model-selection + audit surface stable.
+- **`parser: 'none'` is a first-class option.** If your app stores sensitive documents you don't want Workers AI touching (medical, legal, personal), register the category with no parser. Cofferdam stores the encrypted blob + thumbnail with zero plaintext exposure beyond the per-request decrypt step inside the `cofferdam-vault` Worker.
+- **User confirmation is non-negotiable for credentials going on-chain.** Per `cofferdam-app/ARCHITECTURE.md` §4.1.4, the Cofferdam app always surfaces a confirmation review before a parsed credential commits to the Vault. ML output is never silently trusted for a document whose extracted fields end up bound to an on-chain action (escrow milestone, witness delegation, verified-flavor share).
 - **Cross-scope visibility is one-way: the user only.** A document uploaded under your scope is visible only to your scope (via the SDK) AND to the user themselves (via the Cofferdam app's unified Vault). It is *never* visible to any other consumer app's scope.
 - **The Cofferdam app is your free UI option.** Same pattern as messaging (§4.5): you can ship your own document UI on top of the SDK *or* defer entirely to the Cofferdam app via `openInCofferdam`. Both work; pick per-surface.
 
@@ -1127,7 +1134,7 @@ The reference integration is the canonical answer to *"how do I use this SDK?"* 
 
 ## 7. Pricing, paymaster, and metering
 
-> The SDK is **free to install, free to ship in your binary, and free to use up to the Tier 0 cap**. Past that cap, your app moves to Tier 2 (per-MAU + metered events) or Tier 3 (enterprise). This section is the consumer-app-facing slice of [`Cofferdam/README.md` §10 — Economics, paymaster, and revenue model](../Cofferdam/README.md#10-economics-paymaster-and-revenue-model), with the SDK-specific callsites that drive billing.
+> The SDK is **free to install, free to ship in your binary, and free to use up to the Tier 0 cap**. Past that cap, your app moves to Tier 2 (per-MAU + metered events) or Tier 3 (enterprise). This section is the consumer-app-facing slice of [`cofferdam-app/ARCHITECTURE.md` §10 — Economics, paymaster, and revenue model](../cofferdam-app/ARCHITECTURE.md#10-economics-paymaster-and-revenue-model), with the SDK-specific callsites that drive billing.
 
 ### 7.1 What you pay for, what you don't
 
@@ -1135,9 +1142,9 @@ The reference integration is the canonical answer to *"how do I use this SDK?"* 
 |---|---|
 | Active Cofferdam-signed-in users in your app (MAU base fee, Tier 2+) | The SDK itself, npm install, distribution |
 | Verified-flavor conversations opened by your app's users | Social-flavor conversations |
-| Documents your app parses through the Vault's Gemini pipeline | Documents your app uploads with `parser: 'none'` (blob-only) |
+| Documents your app parses through the Vault's Workers AI pipeline | Documents your app uploads with `parser: 'none'` (blob-only) |
 | Escrows your app creates (take rate on notional) | Escrow *viewing* / status reads |
-| LayerZero attestation mirrors triggered by your app | Self verification gas (paymaster-borne in Plan A; user-borne in Plan B — never integrator-borne) |
+| ~~LayerZero attestation mirrors triggered by your app~~  (legacy line; v2 identity binding is single-chain on ZKSync Era and not separately metered) | Self verification gas (paymaster-borne in Plan A; user-borne in Plan B — never integrator-borne) |
 | Per-call overages above the Tier 2 included quotas | API calls that are read-only / metadata-only |
 
 ### 7.2 Tiers (consumer-app pricing)
@@ -1146,7 +1153,7 @@ The reference integration is the canonical answer to *"how do I use this SDK?"* 
 |---|---|---|---|---|---|---|
 | **Tier 0 — Community** | $0 | 1,000 | ❌ (social only) | ❌ (blob storage only) | ❌ | Best effort |
 | **Tier 1 — Reference** | $0 | unlimited | ✅ | ✅ | ✅ | Best effort |
-| **Tier 2 — Builder** | $0.05 / MAU / mo + metered | unlimited | $0.02 / conv | $0.10 / doc | 0.5% take | 99.5% |
+| **Tier 2 — Builder** | $0.05 / MAU / mo + metered | unlimited | $0.02 / conv | $0.02 / doc | 0.5% take | 99.5% |
 | **Tier 3 — Enterprise** | from $2,000 / mo + rev share | unlimited | bundled | bundled | 0.2% take | 99.9% |
 
 > *Tier 1 is reserved for OffshoreSync as the reference integration. Every other Cofferdam-using app starts at Tier 0 and moves to Tier 2 when they exceed 1,000 MAUs or call a Tier-gated feature.*
@@ -1166,16 +1173,16 @@ This is the canonical mapping from SDK calls to billable units. The SDK reports 
 | `messages.send(...)` | ❌ | — | Free; message volume not metered. |
 | `groups.create({ flavor: 'verified' })` | ✅ | $0.02 / group, once at creation | Plus $0.02 per member who hasn't been in a verified conv before. |
 | `documents.upload({ category, parser: 'none' })` | ❌ | — | Blob storage only; counts toward your storage quota (see §7.5). |
-| `documents.upload({ category })` with parser config | ✅ | $0.10 / doc | Gemini Vision parse. |
+| `documents.upload({ category })` with parser config | ✅ | $0.02 / doc | Workers AI parse via `@cofferdam/sdk-vault parseDocument` against `@cf/google/gemma-4-26b-a4b-it` by default. Price dropped from $0.10/doc (Gemini Vision era) to $0.02/doc post rev-6; final rate card in `financial/REVENUE_MODEL.md` §8.3. |
 | `documents.requestShare(...)` | ❌ | — | Free; ciphertext re-wrap only. |
 | `documents.openInCofferdam(docId)` | ❌ | — | Free; just a deep link. |
 | `signing.signTransaction(...)` against allowlisted contract | ❌ | — | Gas is paymaster-borne; you are not billed. |
 | `signing.signTransaction(...)` against non-allowlisted contract | ❌ | — | User-pays gas; SDK call is free. Tier 3 can register custom contracts. |
-| `escrow.create({ notional, ... })` | ✅ | 0.5% × notional, capped $20 | Charged on creation; refunded on cancel-before-fund. |
+| `escrow.create({ notional, ... })` | ✅ | flat 0.5% × notional (no cap, rev-7) | Charged on creation; refunded on cancel-before-fund. Legacy $20/escrow cap removed alongside OffshoreSync's $50/contract cap — `financial/REVENUE_MODEL.md` §3.1 + §8.3 rev-7; future §7.6 $COFF staking-discount channel is the high-volume fee-reduction lever. |
 | `escrow.release(...)` | ❌ | — | Take rate already collected at create. |
 | `payments.send(...)` (P2P, Cofferdam-to-Cofferdam) | ❌ | — | Subsidized. Gas only. |
 | `payments.offRamp(...)` | ❌ | — | You're not billed; **Cofferdam takes 0.3–0.5% directly from the FX spread**, transparent to the user. Tier 3 can negotiate revenue share. |
-| `attestation.mirrorToZksync(...)` (LayerZero) | ✅ | $0.30 / mirror | Cross-chain commit pass-through. |
+| ~~`attestation.mirrorToZksync(...)` (LayerZero)~~ | n/a | $0 | **Retired in rev-6.** v2 identity binding lands directly on ZKSync Era — there's no cross-chain mirror to meter. |
 | `identity.linkedAccount.update(...)` | ❌ | — | Free. |
 | All `*.list()`, `*.status()`, `*.get(...)` read APIs | ❌ | — | Free. |
 
@@ -1199,7 +1206,7 @@ Your app never holds gas. Your users never see gas as a line item. The economics
        │  • Escrow factory + escrow instances               │
        │  • Merkle anchor (verified-flavor messaging)       │
        │  • Bloom filter snapshot                           │
-       │  • LayerZero attestation mirror                    │
+       │  • v2 NullifierRegistry.bindNullifier (single-chain)│
        │  • [Tier 3: your registered contracts]             │
        └────────────────────────────────────────────────────┘
 ```
@@ -1233,7 +1240,7 @@ Files are deduplicated server-side (CID-keyed), so a shared document only counts
 - **Hard caps optional.** You can set a hard monthly spend cap; when hit, premium features (verified DMs, parsing, escrow) reject with a typed error your app handles gracefully — social messaging, sign-in, and blob Vault keep working.
 - **Public audit log at `audit.cofferdam.xyz`** — every paymaster pool top-up is on-chain and indexed, so you can independently verify your Tier 3 pool's funded balance against your dashboard.
 
-> The platform behind these surfaces (Next.js dashboard, Cloudflare Workers API, Stripe Meter Events pipeline, Safe-multisig treasury, Tier 3 dedicated-paymaster factory) is documented in [`Cofferdam/README.md` §11 — Partners platform](../Cofferdam/README.md#11-partners-platform-dashboard-billing-and-paymaster-operations). As an integrator you don't need to read it — but if you want to know what happens when you click *Top up*, that's where the wiring lives.
+> The platform behind these surfaces (Next.js dashboard, Cloudflare Workers API, Stripe Meter Events pipeline, Safe-multisig treasury, Tier 3 dedicated-paymaster factory) is documented in [`cofferdam-app/ARCHITECTURE.md` §11 — Partners platform](../cofferdam-app/ARCHITECTURE.md#11-partners-platform-dashboard-billing-and-paymaster-operations). As an integrator you don't need to read it — but if you want to know what happens when you click *Top up*, that's where the wiring lives.
 
 ### 7.7 What this means for your sign-in conversion
 
@@ -1245,7 +1252,7 @@ The pricing structure above is designed so that **adding Cofferdam to your app c
 
 This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C value through your app**. Everything else is on us.
 
-> See [`Cofferdam/README.md` §10](../Cofferdam/README.md#10-economics-paymaster-and-revenue-model) for the full revenue model, paymaster pool architecture, and the bounty-funded vs unfunded scenarios that govern the Tier 0 cap.
+> See [`cofferdam-app/ARCHITECTURE.md` §10](../cofferdam-app/ARCHITECTURE.md#10-economics-paymaster-and-revenue-model) for the full revenue model, paymaster pool architecture, and the bounty-funded vs unfunded scenarios that govern the Tier 0 cap.
 
 ---
 
