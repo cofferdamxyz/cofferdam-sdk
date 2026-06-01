@@ -1266,8 +1266,8 @@ This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C v
 // consumer-app/package.json
 {
   "dependencies": {
-    "@cofferdam/sdk":       "github:OffshoreSync/cofferdam-sdk#release-core-tests",
-    "@cofferdam/sdk-react": "github:OffshoreSync/cofferdam-sdk#release-react-tests"
+    "@cofferdam/sdk":       "github:OffshoreSync/cofferdam-sdk#release-core-main",
+    "@cofferdam/sdk-react": "github:OffshoreSync/cofferdam-sdk#release-react-main"
   }
 }
 ```
@@ -1278,8 +1278,8 @@ Then `yarn install` / `npm install` as usual. For a runnable starting template s
 
 | Source branch | Release branches | When to pin here |
 |---|---|---|
-| `tests` | `release-core-tests`, `release-react-tests` | Fast-moving α-1 development. OffshoreSync preview builds gated behind `VITE_COFFERDAM_PREVIEW=1`. |
-| `main` | `release-core-main`, `release-react-main` | Stable. Promoted from `tests` at phase boundaries (α-1 → α-2, etc.). Reserve for any consumer that ships to production. |
+| `main` | `release-core-main`, `release-react-main` | **Default.** Stable, integration-tested channel. Recommended for all consumers; required for any build that ships to production. |
+| `tests` | `release-core-tests`, `release-react-tests` | Fast-moving experimental channel. Pin here only if you need a change that has not yet been promoted to `main`; expect more frequent breakage. |
 | any release-branch SHA | n/a | Pin to a specific snapshot for fully reproducible installs: `github:OffshoreSync/cofferdam-sdk#<release-branch-sha>`. |
 
 Release branches are **force-pushed** by CI on every commit to their source branch, so during alpha consumers should run `yarn install --force` (or delete the relevant `node_modules` entry + lockfile entry) to pick up SDK changes. Once we publish to npm, this caveat disappears.
