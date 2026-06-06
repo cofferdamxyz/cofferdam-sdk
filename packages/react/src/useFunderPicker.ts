@@ -4,7 +4,7 @@
 //
 // What it does
 // ────────────
-// In the corporate flow (`OffshoreSyncEscrowClient.postContractIntent`), the
+// In the corporate flow (`CofferdamSpotEscrowClient.postContractIntent`), the
 // recruiter (HR) has to name a `designatedFunder` — the Finance / Treasury
 // account that's authorised to lock funds against the draft. This hook
 // owns the React-side state for picking that funder:

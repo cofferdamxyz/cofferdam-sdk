@@ -2,7 +2,7 @@
 //
 // These tests need:
 //   1. anvil-zksync running at http://127.0.0.1:8011 (chainId 260)
-//   2. OffshoreSyncReceiver + OffshoreSyncEscrow deployed via
+//   2. CofferdamReceiver + CofferdamSpotEscrow deployed via
 //      `cd ../contracts && yarn deploy:v1-zksync:local`
 //   3. A funded rich-wallet admin key (anvil-zksync's wallet #0 is the default)
 //
@@ -36,12 +36,12 @@ function loadDeployment(): { receiver: string; escrow: string } | null {
   )
   if (!fs.existsSync(p)) return null
   const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-  if (!raw.OffshoreSyncReceiver?.address || !raw.OffshoreSyncEscrow?.address) {
+  if (!raw.CofferdamReceiver?.address || !raw.CofferdamSpotEscrow?.address) {
     return null
   }
   return {
-    receiver: raw.OffshoreSyncReceiver.address,
-    escrow: raw.OffshoreSyncEscrow.address,
+    receiver: raw.CofferdamReceiver.address,
+    escrow: raw.CofferdamSpotEscrow.address,
   }
 }
 

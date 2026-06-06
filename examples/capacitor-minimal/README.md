@@ -144,8 +144,8 @@ yarn node:start
 ```bash
 yarn deploy:v1-zksync:local
 # Prints:
-#   OffshoreSyncReceiver deployed at 0xAbCd…
-#   OffshoreSyncEscrow   deployed at 0x1234…
+#   CofferdamReceiver deployed at 0xAbCd…
+#   CofferdamSpotEscrow   deployed at 0x1234…
 # Persists the same addresses to contracts/deployments/inMemoryNode.json.
 ```
 
@@ -207,11 +207,11 @@ Same UI + flow, pointed at a real public testnet. Useful for validating the flow
 
 | Contract | Address | Explorer |
 |---|---|---|
-| `OffshoreSyncReceiver` | `0xa8F46B15F53D619584a00b91559e37233869ab5a` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0xa8F46B15F53D619584a00b91559e37233869ab5a) |
-| `OffshoreSyncEscrow` | `0x22281d75CF1d34421e5Fc58625885b46dC309723` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0x22281d75CF1d34421e5Fc58625885b46dC309723) |
-| `Verifier_vc_and_disclose` (Phase 0) | `0xf23537eF06fC1283F5be80676418b71aEd81b7E5` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0xf23537eF06fC1283F5be80676418b71aEd81b7E5) |
+| `CofferdamReceiver` | `0x6b4D8580f72C1D3Eb9825aD6EE56c67ED0F1B9Bb` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0x6b4D8580f72C1D3Eb9825aD6EE56c67ED0F1B9Bb) |
+| `CofferdamSpotEscrow` | `0x2F22FE817dAA3Bff101f888C94F3ce0814880535` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0x2F22FE817dAA3Bff101f888C94F3ce0814880535) |
+| `Verifier_vc_and_disclose` (Phase 0) | `0xab4A3De2322d2c2e60531c71c158491a57C43910` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0xab4A3De2322d2c2e60531c71c158491a57C43910) |
 
-Owner: `0xfa4D920d5592289A1A0F73CA49D626EF8FE4D695` (deployer EOA; will hand off to LLC Safe for production). The Receiver/Escrow addresses are baked into the demo as defaults — you only need to set them in `.env.local` if you've redeployed.
+Owner: `0x2c8A01e971d7C51B3B78f9F08c57c45584D96AB2` (deployer EOA; will hand off to LLC Safe for production). The Receiver/Escrow addresses are baked into the demo as defaults — you only need to set them in `.env.local` if you've redeployed.
 
 **Switch the demo to Sepolia:**
 

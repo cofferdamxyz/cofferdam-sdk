@@ -1,6 +1,6 @@
-// OffshoreSyncEscrowClient — Phase α-2 / α-3.
+// CofferdamSpotEscrowClient — Phase α-2 / α-3.
 //
-// Typed, framework-agnostic client for the v1/zksync OffshoreSyncEscrow
+// Typed, framework-agnostic client for the v1/zksync CofferdamSpotEscrow
 // contract. Wraps a `zksync-ethers` Contract instance with:
 //
 //   - Both posting paths:
@@ -10,7 +10,7 @@
 //                        `cancel`, `cancelDraft`
 //   - State reads     — `getContract(contractId)` returns a typed snapshot
 //                        with `status` as a string union (not the raw uint8)
-//   - Static helpers  — `OffshoreSyncEscrowClient.hashTerms(...)` canonical
+//   - Static helpers  — `CofferdamSpotEscrowClient.hashTerms(...)` canonical
 //                        keccak256 of a string or JSON-serialisable object
 //
 // Why this exists
@@ -35,7 +35,7 @@
 //   handles binding upstream.
 // - Not a dispute / arbiter surface. Disputes are owner-only (the LLC
 //   Treasury Safe in production) and out of scope for the consumer-facing
-//   client. A separate `OffshoreSyncEscrowArbiterClient` may land later.
+//   client. A separate `CofferdamSpotEscrowArbiterClient` may land later.
 
 import { keccak256, toUtf8Bytes, type Interface, type Log } from 'ethers'
 import { Contract as ZkContract, Wallet as ZkWallet, Provider as ZkProvider } from 'zksync-ethers'
@@ -48,7 +48,7 @@ import { Contract as ZkContract, Wallet as ZkWallet, Provider as ZkProvider } fr
 // package doesn't drag a compiled-contract dependency. The fragment is the
 // minimal surface needed for both flows + every lifecycle transition.
 
-export const OFFSHORESYNC_ESCROW_ABI = [
+export const COFFERDAM_SPOT_ESCROW_ABI = [
   // ── self-funded path ─────────────────────────────────────────────────
   'function postContract(bytes32 termsHash) payable returns (uint256)',
   // ── corporate path ───────────────────────────────────────────────────
@@ -82,7 +82,7 @@ export const OFFSHORESYNC_ESCROW_ABI = [
 //
 // Mirrors the Solidity Status enum byte-for-byte. `Drafted` is appended at
 // index 8 because it was added after the original 0..7 lifecycle shipped —
-// see OffshoreSyncEscrow.sol §"Job-contract state machine".
+// see CofferdamSpotEscrow.sol §"Job-contract state machine".
 
 export type JobContractStatus =
   | 'Posted' // 0 — funded, awaiting award
@@ -111,8 +111,8 @@ const STATUS_BY_INDEX: readonly JobContractStatus[] = [
 // Public types
 // ────────────────────────────────────────────────────────────────────────────
 
-export interface OffshoreSyncEscrowClientConfig {
-  /** Deployed `OffshoreSyncEscrow` address. */
+export interface CofferdamSpotEscrowClientConfig {
+  /** Deployed `CofferdamSpotEscrow` address. */
   address: string
 
   /**
@@ -192,7 +192,7 @@ export interface JobContractState {
 // Client
 // ────────────────────────────────────────────────────────────────────────────
 
-export class OffshoreSyncEscrowClient {
+export class CofferdamSpotEscrowClient {
   /** Deployed escrow contract address. */
   readonly address: string
 
@@ -211,18 +211,18 @@ export class OffshoreSyncEscrowClient {
   /** Cached `ethers.Interface` for event decoding. */
   private readonly iface: Interface
 
-  constructor(config: OffshoreSyncEscrowClientConfig) {
+  constructor(config: CofferdamSpotEscrowClientConfig) {
     this.address = config.address
     this.signer = config.signer
     const signerProvider = (config.signer.provider ?? null) as ZkProvider | null
     if (!config.provider && !signerProvider) {
       throw new Error(
-        '[cofferdam-sdk] OffshoreSyncEscrowClient: signer has no provider and no fallback provider was supplied.',
+        '[cofferdam-sdk] CofferdamSpotEscrowClient: signer has no provider and no fallback provider was supplied.',
       )
     }
     this.provider = config.provider ?? (signerProvider as ZkProvider)
-    this.contract = new ZkContract(this.address, OFFSHORESYNC_ESCROW_ABI as unknown as string[], config.signer)
-    this.readonly = new ZkContract(this.address, OFFSHORESYNC_ESCROW_ABI as unknown as string[], this.provider)
+    this.contract = new ZkContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], config.signer)
+    this.readonly = new ZkContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], this.provider)
     this.iface = this.contract.interface
   }
 
@@ -235,7 +235,7 @@ export class OffshoreSyncEscrowClient {
    * in a single tx. Caller (signer) must be a Cofferdam-bound recruiter.
    *
    * @param termsHash  keccak256 of the canonical off-chain terms blob.
-   *                   Build via `OffshoreSyncEscrowClient.hashTerms(...)`.
+   *                   Build via `CofferdamSpotEscrowClient.hashTerms(...)`.
    * @param amountWei  Native ETH amount to lock (in wei).
    * @returns `{ contractId, txHash }` once the tx mines.
    */

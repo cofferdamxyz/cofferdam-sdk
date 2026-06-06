@@ -21,25 +21,53 @@ export {
 } from './providers/mockProfiles.js'
 export { derivePseudonym, deriveScopeKey } from './identity/pseudonym.js'
 export {
-  OffshoreSyncEscrowClient,
-  OFFSHORESYNC_ESCROW_ABI,
+  tierOf,
+  isUntrustedLowTier,
+  chooseEnrollmentLane,
+  evaluateUpgrade,
+  assertCanEnrollFirstPasskey,
+  authorityStateFromResponse,
+  nextMigrationStatus,
+  DEFAULT_DEVICE_CAPABILITY,
+  PasskeyUpgradeError,
+  UpgradePathLockedError,
+  AlreadyHighTierError,
+  ManagedAuthorityNotUpgradableError,
+  PasskeyUpgradeUnsupportedError,
+  type LanePolicy,
+  type MigrationEvent,
+} from './identity/authority.js'
+export {
+  CofferdamSpotEscrowClient,
+  COFFERDAM_SPOT_ESCROW_ABI,
   OPEN_FUNDING,
-  type OffshoreSyncEscrowClientConfig,
+  type CofferdamSpotEscrowClientConfig,
   type PostResult,
   type TxResult,
   type TxOptions,
   type JobContractState,
   type JobContractStatus,
-} from './escrow/OffshoreSyncEscrowClient.js'
+} from './escrow/CofferdamSpotEscrowClient.js'
 
 export type {
+  AuthorityDescriptor,
+  AuthorityKind,
+  AuthorityState,
+  AuthorityTier,
   CofferdamConfig,
   CofferdamProvider,
   Country,
+  DeviceCapability,
+  EnrollFirstPasskeyOptions,
+  EnrollmentLane,
+  MigrationStatus,
   NetworkMode,
+  PasskeyEnrollmentResult,
+  PasskeyUpgradeDirective,
   SelectiveClaim,
   SignInErrorCode,
   SignInPolicy,
   SignInResponse,
+  UpgradeReason,
   VerifiedClaims,
 } from './types.js'

@@ -671,14 +671,14 @@ const proof = await cofferdam.proofs.request({
 
 ### 4.7a On-chain escrow (α-2)
 
-The SDK ships a typed client for the `OffshoreSyncEscrow` v1/zksync contract. It handles both posting paths, the full lifecycle, contract-id extraction from receipts, and the status enum. Consumer apps integrating the on-chain employment-escrow flow import it instead of re-deriving the ABI.
+The SDK ships a typed client for the `CofferdamSpotEscrow` v1/zksync contract. It handles both posting paths, the full lifecycle, contract-id extraction from receipts, and the status enum. Consumer apps integrating the on-chain employment-escrow flow import it instead of re-deriving the ABI.
 
 ```ts
-import { OffshoreSyncEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
+import { CofferdamSpotEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
 import { Wallet as ZkWallet } from 'zksync-ethers'
 
-const escrow = new OffshoreSyncEscrowClient({
-  address: '0x22281d75CF1d34421e5Fc58625885b46dC309723', // Sepolia α-2 deploy
+const escrow = new CofferdamSpotEscrowClient({
+  address: '0x2F22FE817dAA3Bff101f888C94F3ce0814880535', // Sepolia α-2 deploy
   signer:  recruiterWallet,                              // any Cofferdam-bound ZkWallet
 })
 ```
@@ -688,7 +688,7 @@ const escrow = new OffshoreSyncEscrowClient({
 Recruiter posts AND funds in a single tx:
 
 ```ts
-const termsHash = OffshoreSyncEscrowClient.hashTerms({
+const termsHash = CofferdamSpotEscrowClient.hashTerms({
   jobId: 'tideboat-galley-may-2026',
   workerProfile: '@cofferdam:abc…',
   pay: { amount: '0.001', token: 'ETH' },
@@ -713,7 +713,7 @@ const { contractId } = await escrow.postContractIntent(
 )
 
 // 2. Finance funds (separate tx, may come hours/days later)
-const escrowAsFinance = new OffshoreSyncEscrowClient({
+const escrowAsFinance = new CofferdamSpotEscrowClient({
   address: escrow.address,
   signer:  financeWallet,
 })
@@ -733,7 +733,7 @@ After funding, both paths converge — `awardContract`, `checkIn`, `checkOut`, a
 
 ```tsx
 import { useFunderPicker } from '@cofferdam/sdk-react'
-import { OffshoreSyncEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
+import { CofferdamSpotEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
 
 function DraftJobForm({ recruiterWallet, suggestionsFromBackend }) {
   const picker = useFunderPicker({
@@ -742,7 +742,7 @@ function DraftJobForm({ recruiterWallet, suggestionsFromBackend }) {
   })
 
   const onDraft = async () => {
-    const escrow = new OffshoreSyncEscrowClient({ address, signer: recruiterWallet })
+    const escrow = new CofferdamSpotEscrowClient({ address, signer: recruiterWallet })
     const { contractId } = await escrow.postContractIntent(
       termsHash,
       amountWei,
@@ -773,7 +773,7 @@ function DraftJobForm({ recruiterWallet, suggestionsFromBackend }) {
 }
 ```
 
-The hook does **not** verify the picked address is Cofferdam-bound on-chain — the escrow contract enforces that at funding time via `onlyBoundAccount`. If you want a pre-flight UX check ("This address can't fund yet — invite them to Cofferdam first"), call `receiver.isAccountBound(address)` on your `OffshoreSyncReceiver` instance and gate the button accordingly.
+The hook does **not** verify the picked address is Cofferdam-bound on-chain — the escrow contract enforces that at funding time via `onlyBoundAccount`. If you want a pre-flight UX check ("This address can't fund yet — invite them to Cofferdam first"), call `receiver.isAccountBound(address)` on your `CofferdamReceiver` instance and gate the button accordingly.
 
 A fully-worked three-role demo (recruiter + funder + worker, both posting paths, local + Sepolia) lives in [`examples/capacitor-minimal`](./examples/capacitor-minimal).
 

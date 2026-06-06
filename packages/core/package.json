@@ -21,8 +21,8 @@
       "import": "./dist/providers/LocalChainProvider.js"
     },
     "./escrow": {
-      "types": "./dist/escrow/OffshoreSyncEscrowClient.d.ts",
-      "import": "./dist/escrow/OffshoreSyncEscrowClient.js"
+      "types": "./dist/escrow/CofferdamSpotEscrowClient.d.ts",
+      "import": "./dist/escrow/CofferdamSpotEscrowClient.js"
     }
   },
   "peerDependencies": {

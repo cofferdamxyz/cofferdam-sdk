@@ -14,7 +14,7 @@
 //      can post / award / dispute on-chain. PoC convenience only.
 //
 //   3. (Optional) Compute a deterministic nullifier from `mockUserId` and
-//      call `OffshoreSyncReceiver.bindNullifier(account, nullifier)` from
+//      call `CofferdamReceiver.bindNullifier(account, nullifier)` from
 //      the admin key — this simulates the production v2 path. The admin
 //      key NEVER exists in the client in production; production binding
 //      goes through the cofferdam-prover Cloudflare Container (produces
@@ -22,7 +22,7 @@
 //      against `v2/self/SelfAttesterRegistry`-registered key) + the user's
 //      AA tx submitting to `v2/self/NullifierRegistry.bindNullifier`. Full
 //      flow in cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3. Legacy α-2 / α-3
-//      LayerZero ingress (`OffshoreSyncReceiver._lzReceive`) remains
+//      LayerZero ingress (`CofferdamReceiver._lzReceive`) remains
 //      deployed on-chain but is not the production path post-rev-6.
 //
 //   4. Derive `appPseudonym = HMAC(scopeSalt, accountAddress)` and return a
@@ -86,9 +86,9 @@ export interface LocalChainProviderConfig {
 
   /** Deployed v1/zksync contract addresses. */
   contracts: {
-    /** `OffshoreSyncReceiver` address — required for identity binding. */
+    /** `CofferdamReceiver` address — required for identity binding. */
     receiver: string
-    /** `OffshoreSyncEscrow` — currently informational; reserved for future
+    /** `CofferdamSpotEscrow` — currently informational; reserved for future
      *  flows (e.g. provider returning a pre-funded escrow handle). */
     escrow?: string
   }

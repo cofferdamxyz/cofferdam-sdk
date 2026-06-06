@@ -43,7 +43,7 @@ import {
 } from 'zksync-ethers'
 import { LocalChainProvider } from '@cofferdam/sdk/local'
 import {
-  OffshoreSyncEscrowClient,
+  CofferdamSpotEscrowClient,
   OPEN_FUNDING,
   type SignInResponse,
 } from '@cofferdam/sdk'
@@ -80,8 +80,8 @@ const ANVIL_RICH_WALLET_PK =
 // users don't have to copy-paste addresses; can still be overridden via
 // VITE_TESTNET_*_ADDRESS if a fresh redeploy happens.
 const SEPOLIA_DEFAULTS = {
-  receiver: '0xa8F46B15F53D619584a00b91559e37233869ab5a',
-  escrow: '0x22281d75CF1d34421e5Fc58625885b46dC309723',
+  receiver: '0x6b4D8580f72C1D3Eb9825aD6EE56c67ED0F1B9Bb',
+  escrow: '0x2F22FE817dAA3Bff101f888C94F3ce0814880535',
 } as const
 
 function buildConfig(chain: ChainTarget): ChainConfig {
@@ -385,13 +385,13 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
 
   // ── Escrow actions ───────────────────────────────────────────────────
   //
-  // All flows go through `OffshoreSyncEscrowClient` from @cofferdam/sdk.
+  // All flows go through `CofferdamSpotEscrowClient` from @cofferdam/sdk.
   // The client owns: ABI, event decoding, contract-id extraction, and the
   // status enum. We just wire it to each role's signing wallet and surface
   // the tx hash to the activity log via the `onSent` hook.
   const escrowFor = useCallback(
     (wallet: ZkWallet) =>
-      new OffshoreSyncEscrowClient({ address: cfg.escrow, signer: wallet }),
+      new CofferdamSpotEscrowClient({ address: cfg.escrow, signer: wallet }),
     [cfg.escrow],
   )
 
@@ -399,7 +399,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     const wallet = roles.recruiter.wallet
     if (!wallet) return
     const escrow = escrowFor(wallet)
-    const termsHash = OffshoreSyncEscrowClient.hashTerms(`self-${Date.now()}`)
+    const termsHash = CofferdamSpotEscrowClient.hashTerms(`self-${Date.now()}`)
     const tx = newTx(
       setTxs,
       `🧾 postContract (self-funded, ${fmtEth(cfg.amountWei)})`,
@@ -421,7 +421,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     const wallet = roles.recruiter.wallet
     if (!wallet || !designatedFunderAddress) return
     const escrow = escrowFor(wallet)
-    const termsHash = OffshoreSyncEscrowClient.hashTerms(`intent-${Date.now()}`)
+    const termsHash = CofferdamSpotEscrowClient.hashTerms(`intent-${Date.now()}`)
     const isOpenFunding = designatedFunderAddress === OPEN_FUNDING
     const tx = newTx(
       setTxs,
@@ -593,7 +593,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
           <p className="lead">
             Missing <code>VITE_TESTNET_ADMIN_PRIVATE_KEY</code>. Sepolia mode
             requires a funded EOA that owns the deployed{' '}
-            <code>OffshoreSyncReceiver</code> — it signs <code>bindNullifier</code>{' '}
+            <code>CofferdamReceiver</code> — it signs <code>bindNullifier</code>{' '}
             for new sign-ins and pays gas + pre-fund transfers. Add it to{' '}
             <code>.env.local</code> and restart Vite. The deployer key from{' '}
             <code>contracts/.env</code> is the one you want; keep it topped up

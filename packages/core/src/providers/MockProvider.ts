@@ -12,10 +12,17 @@
 //
 // Selecting via `new Cofferdam({ network: 'mock', ... })`.
 
+import { assertCanEnrollFirstPasskey, tierOf } from '../identity/authority.js'
 import { derivePseudonym, deriveScopeKey } from '../identity/pseudonym.js'
 import type {
+  AuthorityKind,
+  AuthorityState,
   CofferdamProvider,
+  DeviceCapability,
+  EnrollFirstPasskeyOptions,
+  MigrationStatus,
   NetworkMode,
+  PasskeyEnrollmentResult,
   SignInErrorCode,
   SignInPolicy,
   SignInResponse,
@@ -50,6 +57,24 @@ export interface MockProviderConfig {
    * Default: 250.
    */
   latencyMs?: number
+  /**
+   * Authority kind this mock login represents (rev-7.7). Default: 'passkey'
+   * (a self-custodied, high-tier user). Use 'password' / 'oauth_google' /
+   * 'oauth_apple' to model an untrusted low-tier login that needs migration,
+   * or 'polis_sso' for a managed enterprise authority.
+   */
+  authorityKind?: AuthorityKind
+  /** Mock device capabilities for the enrolment-lane branch (§3.12 C3). */
+  deviceCapability?: Partial<DeviceCapability>
+  /** Initial migration status. Default: derived from `authorityKind`. */
+  migrationStatus?: MigrationStatus
+  /**
+   * Whether the AA is already deployed. Default: true for a passkey login,
+   * false (counterfactual) for a low-tier login (§3.12 C2).
+   */
+  accountDeployed?: boolean
+  /** Device passkeys already registered. Default: 1 for passkey, else 0. */
+  passkeyCount?: number
 }
 
 interface ResolvedMockConfig {
@@ -75,6 +100,8 @@ export class MockProvider implements CofferdamProvider {
   readonly mode: NetworkMode = 'mock'
 
   private readonly config: ResolvedMockConfig
+  private readonly capability: DeviceCapability
+  private state: AuthorityState
 
   constructor(config: MockProviderConfig) {
     this.config = {
@@ -90,6 +117,28 @@ export class MockProvider implements CofferdamProvider {
         ...config.verifiedClaims,
       },
       latencyMs: config.latencyMs ?? 250,
+    }
+
+    // ── Tiered-authority state (rev-7.7) ──────────────────────────────────────
+    const kind: AuthorityKind = config.authorityKind ?? 'passkey'
+    const tier = tierOf(kind)
+    const passkeyCount = config.passkeyCount ?? (tier === 'high' ? 1 : 0)
+    this.state = {
+      active: { kind, tier },
+      passkeyCount,
+      upgradeLocked: passkeyCount > 0,
+      accountDeployed: config.accountDeployed ?? tier === 'high',
+      migrationStatus:
+        config.migrationStatus ?? (tier === 'high' ? 'enrolled' : 'pending'),
+    }
+    this.capability = {
+      hasPlatformAuthenticator:
+        config.deviceCapability?.hasPlatformAuthenticator ?? false,
+      inBrowserPasskeyReliable:
+        config.deviceCapability?.inBrowserPasskeyReliable ?? false,
+      // Mock default: the RN app is reachable, so the canonical QR lane works
+      // out of the box for migration tests.
+      nativeAppReachable: config.deviceCapability?.nativeAppReachable ?? true,
     }
   }
 
@@ -151,11 +200,57 @@ export class MockProvider implements CofferdamProvider {
         issuedAt: Date.now(),
       }),
       attestation: 'mock-attestation-v1',
+      authority: { ...this.state.active },
+      migrationStatus: this.state.migrationStatus,
+      accountDeployed: this.state.accountDeployed,
     }
   }
 
   signOut(): void {
     // No persistent state to clear in this provider.
+  }
+
+  async getAuthorityState(): Promise<AuthorityState> {
+    // In-memory read — no simulated latency (it would compound with signIn's
+    // when the Cofferdam class computes the upgrade directive).
+    return { ...this.state, active: { ...this.state.active } }
+  }
+
+  deviceCapability(): DeviceCapability {
+    return { ...this.capability }
+  }
+
+  async enrollFirstPasskey(
+    opts: EnrollFirstPasskeyOptions,
+  ): Promise<PasskeyEnrollmentResult> {
+    await sleep(this.config.latencyMs)
+    // Client-side ratchet guard; the on-chain validator is the real enforcer.
+    assertCanEnrollFirstPasskey(this.state)
+    const accountAddress = await deriveMockAddress(this.config.mockUserId)
+    // Fire the one-way ratchet: the first passkey becomes the high-tier
+    // authority and the untrusted low-tier authority is permanently locked out
+    // (IDENTITY_LAYER_DESIGN.md §2.5.2).
+    this.state = {
+      active: { kind: 'passkey', tier: 'high' },
+      passkeyCount: 1,
+      upgradeLocked: true,
+      accountDeployed: true,
+      migrationStatus: 'enrolled',
+    }
+    return {
+      accountAddress,
+      accountDeployed: true,
+      passkeyCredentialId: `mock-cred:${this.config.mockUserId}:${opts.lane}`,
+      authority: { kind: 'passkey', tier: 'high' },
+      migrationStatus: 'enrolled',
+      upgradeLocked: true,
+    }
+  }
+
+  async declineMigration(): Promise<void> {
+    if (this.state.migrationStatus !== 'enrolled') {
+      this.state = { ...this.state, migrationStatus: 'declined' }
+    }
   }
 }
 

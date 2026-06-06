@@ -12,6 +12,43 @@
 > critical path entirely; AWS dependencies do not enter it. See
 > `@/Users/hoff/OffshoreSync/financial/REVENUE_MODEL.md` §10.1 +
 > §11 for the financial implications of this stack decision.
+>
+> **Rev-7.1 (2026-06-01) — Enterprise alignment patch.** Extends this
+> doc to cover the **two-tier identity binding** introduced by
+> `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §3.3: a third
+> provider variant — `CofferdamEnterpriseProvider` — bootstraps an
+> AA on ZKSync Era from a Polis SSO session (no Self.xyz on the
+> critical path), and the SDK gains a **post-employment recovery
+> ceremony** primitive that lets a worker convert a company-bound
+> AA to sovereign Self-bound *after* their corporate SSO has been
+> revoked. The §3.0 bind flow is unchanged for sovereign-first
+> consumers (Cofferdam RN app, OffshoreSync social); the new §3.10
+> covers the enterprise-first path; §7 multi-device primitives are
+> extended with the new error/recovery shapes. See the new §3.11
+> below for the **post-employment Self-bind recovery ceremony**
+> referenced from `ENTERPRISE_MODULE_PLAN.md` §3.3.2 + §3.3.4.
+>
+> **Rev-7.6 (2026-06-04) — plane/consumer boundary.** The enterprise AA
+> bootstrap + recovery primitives here run on the **Cofferdam plane**
+> (`cofferdam-api` + Neon Postgres + on-chain), never inside a consumer app.
+> **No consumer ever holds a wallet address:** the plane resolves
+> pseudonym→AA address server-side and the SDK returns labels/roles/balances,
+> not addresses. MongoDB is consumer-only; the plane has none. See
+> `ENTERPRISE_MODULE_PLAN.md` §0.
+>
+> **Rev-7.7 (2026-06-05) — Tiered authority model + consumer password→passkey
+> migration.** Adds §2.5 (authority tiers + the one-way upgrade ratchet) and
+> §3.12 (the consumer migration flow). Invariant: **every login — local
+> password, Google/Apple OAuth, Polis SSO, or passkey — binds to an AA**;
+> non-passkey logins are **low-tier** authorities upgradeable to a **high-tier
+> device passkey**. For *untrusted* low-tier (password / social OAuth) the
+> upgrade is a **one-way ratchet** — it may authorise only the first-passkey
+> enrolment, then is permanently locked out, so a leaked credential can never
+> add an attacker passkey. *Managed* low-tier (`PolisSessionAuthority`) is the
+> deliberate exception (IdP-brokered, centrally SCIM-revocable, persists with
+> OR semantics — §2.4 / §3.10). Mirrors the Uniswap in-app-wallet UX but on
+> ZKSync Era native AA + Secure-Enclave passkey instead of Privy MPC, with
+> **no seed phrase** (recovery = a second passkey or Self.xyz re-bind).
 
 ## Table of contents
 
@@ -81,11 +118,11 @@ on-chain on ZKSync Era; the passkey is the validator key.
 1. **Account deploy.** First-passkey-on-first-device — call the
    ZKSync Era native AA factory; deploy the smart account with the
    passkey as the sole initial validator (≤3 passkeys per AA
-   enforced on-chain by `OffshoreSyncAccountValidator` per
+   enforced on-chain by `CofferdamAccountValidator` per
    `cofferdam-app/ARCHITECTURE.md` §3.3).
 2. **Passkey signing.** Native WebAuthn ceremony (P-256, ES256
    COSE algorithm). Returns a signature compatible with
-   `OffshoreSyncAccountValidator.isValidSignature(hash, signature)`.
+   `CofferdamAccountValidator.isValidSignature(hash, signature)`.
 3. **AA tx submission.** Wraps the signed UserOp + submits via the
    Cofferdam paymaster (sponsored gas).
 4. **Passport prove orchestration.** Coordinates with the
@@ -141,6 +178,156 @@ pays through the consumer-app's per-tenant paymaster sub-pool
 (Tier 2/3 per `financial/REVENUE_MODEL.md` §8). Same SDK call;
 different payer under the hood.
 
+### 2.4 `CofferdamEnterpriseProvider` — for company-bound enterprise sign-in (rev-7.1)
+
+**Hosts.** Any consumer's enterprise dashboard — the provider ships in
+`@cofferdam/sdk-enterprise` and the host is just a consumer of it. Two
+deployments today: Cofferdam's own first-party `cofferdam.xyz/enterprise`,
+and OffshoreSync's maritime `enterprise.offshoresync.com`
+(`react-enterprise/`, embedding the module per `ENTERPRISE_MODULE_PLAN.md`
+rev-7.3). Shipped by Phase E-1.5 of `ENTERPRISE_MODULE_PLAN.md` §11.
+
+**Owns.** No keys. The AA authority is a Polis SSO ID-token verified
+against the worker's IdP, not a passkey. This is the
+`PolisSessionAuthority` module described in
+`ENTERPRISE_MODULE_PLAN.md` §3.3.2.
+
+> **Deployment (rev-7.5 — `ENTERPRISE_MODULE_PLAN.md` §2.6.1).** Ory Polis
+> is **self-hosted open-source** (Apache-2.0); its OIDC flow + SCIM are
+> **brokered by the `cofferdam-api` plane**, not the consumer's
+> `react-enterprise/`/`react-server` backend. The provider initiates SSO
+> through the SDK and consumes the resulting Cofferdam session; the plane
+> consumes the Polis callback and invokes `cofferdam-vault`. The on-chain
+> `PolisSessionAuthority` + pseudonym derivation below are unchanged.
+
+**Responsibilities.**
+
+1. **AA account deploy on first SSO sign-in.** When the
+   `cofferdam-api` plane broker receives the Polis callback (a fresh
+   ID-token for `user@mycorp.com`), it invokes the `cofferdam-vault`
+   Worker which
+   deterministically derives the worker's **company-bound
+   pseudonym** = `keccak256(companyScopeSalt || polisSub ||
+   "cofferdam-company-pseudonym-v1")`, computes the
+   counterfactual AA address, and submits the ZKSync Era AA
+   factory tx with `PolisSessionAuthority` as the sole initial
+   authority module (paymaster-sponsored). The contract reference
+   shape matches `CofferdamAccountValidator` in §3, but the
+   validator interface accepts a Polis ID-token signature instead
+   of a P-256 WebAuthn signature.
+2. **SSO session refresh.** Polis ID-tokens are short-lived (~1h);
+   the **`cofferdam-api` plane** holds the OAuth refresh token / OIDC
+   session (per §2.6.1) and re-mints ID-tokens on demand for each AA
+   tx; the provider drives this through the SDK.
+3. **Authority gate composition.** When the worker later binds
+   Self (§3.10 / §3.11 below), this provider remains valid in
+   parallel — both `PolisSessionAuthority` and
+   `SelfNullifierAuthority` are registered on the AA with OR
+   semantics. SSO revocation does not invalidate Self-bound
+   access; Self revocation does not invalidate SSO-bound access.
+4. **Returns `EnterpriseSignInResponse`** — same shape as the
+   native + web providers' `SignInResponse`, with two extra
+   fields: `pseudonymKind: 'company_bound' | 'sovereign'` and
+   `employerRef: bytes32`. Code that doesn't care continues to
+   read only the base fields; code that does care (e.g. the
+   enterprise dashboard's "you have not bound a sovereign
+   identity" banner) reads the extras.
+5. **No Self.xyz dependency.** This provider must never import
+   from `@selfxyz/*`. The Self-bind path lives in the Cofferdam RN
+   app and is reached via `CofferdamNativeProvider` (or via the
+   §3.11 post-employment recovery ceremony). Enforced at the
+   package-boundary level — `@cofferdam/sdk-enterprise` does not
+   declare `@selfxyz/mobile-sdk-alpha` as a peer dep.
+
+**Implements.** `CofferdamProvider` from
+`@/Users/hoff/OffshoreSync/cofferdam-sdk/packages/core/src/types.ts`.
+Same interface as native + web; the enterprise variant lives in
+`@cofferdam/sdk-enterprise` per the §1 sub-package list.
+
+#### 2.4.1 Why three providers and not two
+
+The web provider (§2.2) is a remote-signer client for a *consumer
+who already holds a passkey*. The enterprise provider is the case
+where the consumer **does not yet hold any device-bound material**:
+the worker has nothing but an SSO session, and we want them to
+have a fully-functional on-chain identity *anyway*. Forcing them
+through the §2.1 + §2.2 passkey-first flow would re-introduce the
+KYC-gating-utility error that rev-7.1 explicitly walks away from
+(see `ENTERPRISE_MODULE_PLAN.md` §3.3.3).
+
+The three providers map cleanly to the three identity surfaces:
+
+| Provider | Authority root | Onboarding event | First-login surface |
+|---|---|---|---|
+| `CofferdamNativeProvider` | Device passkey | Cofferdam RN app install | Sovereign Self.xyz bind (eventually, value-gated per §3.5 of `cofferdam-app/docs/ARCHITECTURE.md`) |
+| `CofferdamAppProvider` | Deep-link to native | Web SDK consumer load | Deep-link round-trip to native — no key locally |
+| `CofferdamEnterpriseProvider` | Polis SSO ID-token | Worker's first sign-in at `enterprise.offshoresync.com` | Company-bound AA, no Self.xyz required |
+
+### 2.5 Authority tiers and the one-way upgrade ratchet (rev-7.7)
+
+The three providers above differ only in *how the first authority is
+established*; they all converge on one tiered authority model on the AA.
+**Every login binds to an AA** — local password, Google/Apple OAuth, Polis
+SSO, or a device passkey alike — because the AA is the master identity for
+all Cofferdam interactions (`cofferdam-app/docs/ARCHITECTURE.md` §3.2). The
+tier of the authority that signed determines what it may do.
+
+#### 2.5.1 The tiers
+
+| Tier | Authority module | Established by | May sign |
+|---|---|---|---|
+| **High** | device passkey (P-256, Secure Enclave / StrongBox) — `CofferdamAccountValidator` | native passkey ceremony (§2.1) or QR handoff to the RN app (§2.2) | **everything** — value transfer, `addPasskey`/`addAuthority`/`revoke`, contract calls |
+| **Low — untrusted** | password / social-OAuth session authority | a consumer's local-password or Google/Apple login (§3.12) | **only** enrol the *first* passkey (+ counterfactual deploy); **zero value**; nothing else |
+| **Low — managed** | `PolisSessionAuthority` | enterprise Polis SSO (§2.4 / §3.10) | company-bound ops per `ENTERPRISE_MODULE_PLAN.md` §3.3.2; persists with OR semantics |
+
+#### 2.5.2 The one-way ratchet (untrusted low-tier only)
+
+For an **untrusted** low-tier authority — a leakable credential — the upgrade
+path is a **one-way ratchet**, enforced in the AA validator:
+
+1. The AA may deploy with the untrusted low-tier authority as its sole
+   bootstrap authority.
+2. That authority may authorise **exactly one** state change: enrolling the
+   **first device passkey** (with zero value movement). Nothing else.
+3. The instant the first passkey registers as the **high-tier** authority, the
+   validator **permanently revokes the low-tier authority's
+   add/remove-authority power**. From then on, **only a high-tier passkey may
+   add or remove passkeys/authorities.** There is no path back.
+
+Rationale: a leaked password or hijacked OAuth token must never be usable to
+add an *attacker's* passkey and inherit full control. After the ratchet fires,
+a leaked credential is inert against the wallet — it may at most still
+authenticate the consumer's *app session* (a separate, non-wallet concern).
+
+**Managed low-tier is the deliberate exception.** `PolisSessionAuthority` is
+IdP-brokered, server-held, and centrally **SCIM-revocable** by the employer,
+so it is not a leakable end-user credential in the same sense. It is **not**
+ratchet-locked: it persists alongside a later passkey or
+`SelfNullifierAuthority` with OR semantics (§3.10), and is removed only by the
+§3.11 post-employment recovery (`recoverWithSelf`). This is intentional — the
+employer needs continuity of control over company-bound funds.
+
+#### 2.5.3 What the ratchet costs: recovery
+
+Because the untrusted low-tier is locked out after the first passkey, **a
+password/social login is not a recovery path.** Account recovery is exactly
+two doors:
+
+1. a **second, pre-enrolled passkey** (a backup device added while the user
+   still had a working one — ≤3 per AA), or
+2. a **Self.xyz re-bind** (`recoverWithSelf`, §3.11.5; `ARCHITECTURE.md` §3.3
+   emergency rebind).
+
+Two consequences the implementation MUST honour:
+
+- The first-passkey enrolment flow (§3.12) **must immediately prompt a backup**
+  — a second device and/or a Self-bind — or single-device users silently have
+  no recovery.
+- **Self.xyz is the recovery floor.** A single-device user who never bound a
+  passport and loses the device is **unrecoverable** — the residual case
+  `ENTERPRISE_MODULE_PLAN.md` §3.3.4 already acknowledges. State this honestly
+  at enrolment, not at loss.
+
 ## 3. The bind flow, end to end
 
 This is the single most important sequence in T1.1. Walk it
@@ -157,7 +344,7 @@ of these steps.
 │     - Public key extracted for AA deploy.                         │
 │     ↓                                                             │
 │  3. RN app calls ZKSync Era AA factory (paymaster-sponsored):     │
-│       deploy({ validator: OffshoreSyncAccountValidator,           │
+│       deploy({ validator: CofferdamAccountValidator,           │
 │                initialPasskey: <P-256 pubkey> })                  │
 │     - Returns smart-account address AA-x.                         │
 │     - No Self.xyz yet; verified=false on first sign-in.           │
@@ -227,6 +414,549 @@ of these steps.
   `NullifierAlreadyBoundError` in SDK. Multi-device reconciliation
   (§7) catches the nullifier-collision case before the tx is
   even submitted.
+
+### 3.10 The enterprise-flavoured bind flow (rev-7.1)
+
+The §3 flow above is the **sovereign-first** path: device passkey
+materialises first, Self.xyz bind happens later, account-and-bind
+both ultimately live under the worker's exclusive control. The
+enterprise-flavoured flow inverts steps 1–4 — the worker gets an
+on-chain AA **before** holding any device-local material, by virtue
+of a corporate SSO session — and defers the §3 step 5 onwards
+indefinitely. Both flows converge at the same end-state when the
+worker eventually Self-binds (§3.11 below); the difference is purely
+*when* the device-material ceremony happens.
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│  E1. Worker signs in at enterprise.offshoresync.com with their    │
+│      corporate IdP (Okta / Workday / Azure AD via Ory Polis).     │
+│      Polis returns ID-token for user@mycorp.com.                  │
+│      ↓                                                            │
+│  E2. CofferdamEnterpriseProvider (§2.4) calls cofferdam-vault     │
+│      Worker:                                                      │
+│        derivePseudonym({                                          │
+│          kind: 'company_bound',                                   │
+│          companyScopeSalt: <per-tenant, in vault>,                │
+│          polisSub: <from ID-token>,                               │
+│        }) → companyBoundPseudonym                                 │
+│      ↓                                                            │
+│  E3. AA factory deploy on ZKSync Era (paymaster-sponsored):       │
+│        deployCompanyBound({                                       │
+│          authority: PolisSessionAuthority,                        │
+│          polisJwksRef: <IdP JWKS URL ref>,                        │
+│          employerRef: <bytes32(domain)>,                          │
+│          initialPseudonym: companyBoundPseudonym,                 │
+│        }) → AA-x                                                  │
+│      No Self.xyz. No nullifier. No passport.                      │
+│      ↓                                                            │
+│  E4. EnterpriseSignInResponse returned. pseudonymKind =           │
+│      'company_bound'. Worker can now: co-sign sub-Safe txs,       │
+│      receive USDC payroll from own-employer Payroll sub-Safe,     │
+│      witness contracts issued by own employer, place into the     │
+│      tenant's Merkle org tree (§4.7 of ENTERPRISE_MODULE_PLAN).   │
+│                                                                   │
+│  ── opt-in Self-bind trigger (worker decision, any later time) ── │
+│                                                                   │
+│  E5. Worker installs Cofferdam RN app, opens "Company             │
+│      Bindings" page, taps "Bind sovereign identity".              │
+│      ↓                                                            │
+│  E6. RN app generates a device passkey (§3 step 2) AND walks      │
+│      through Self.xyz NFC + Container prover + attester           │
+│      (§3 steps 6–8). The Container endpoint is told the bind      │
+│      target is an EXISTING AA (AA-x from E3), not a fresh         │
+│      deploy.                                                      │
+│      ↓                                                            │
+│  E7. RN app submits the AA module-add tx:                         │
+│        AA-x.addAuthority(                                         │
+│          SelfNullifierAuthority,                                  │
+│          { nullifier, proof, publicInputs,                        │
+│            attester, attesterSig }                                │
+│        )                                                          │
+│      Contract: same Groth16 + SelfAttesterRegistry checks as §3   │
+│      step 8, gated on the calling AA being AA-x with an active    │
+│      PolisSessionAuthority signature (proving the request is      │
+│      authentic at the moment of the add).                         │
+│      ↓                                                            │
+│  E8. AA-x now has TWO authorities with OR semantics.              │
+│      cofferdam-vault recomputes the pseudonym swap                │
+│      (§3.3.1 of ENTERPRISE_MODULE_PLAN):                          │
+│        sovereignPseudonym = keccak256(                            │
+│          companyScopeSalt || selfNullifier ||                     │
+│          "cofferdam-company-pseudonym-v1")                        │
+│      and emits a Merkle leaf-update batch on the next             │
+│      updateOrgRoot tx. pseudonymKind transitions to 'sovereign'.  │
+│      ↓                                                            │
+│  E9. Subsequent EnterpriseSignInResponse → pseudonymKind =        │
+│      'sovereign'. The "Company Bindings" page surfaces the        │
+│      additional outward-facing capabilities (witness contracts    │
+│      at OTHER companies, portable identity past employment end,   │
+│      etc. — see ENTERPRISE_MODULE_PLAN §3.3 Tier 2 capability     │
+│      list).                                                       │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+**Properties of this flow:**
+
+- **AA-x address is stable across the transition.** No address
+  rotation. All historical txs against AA-x — sub-Safe co-signs,
+  USDC receipts, witness attestations — remain bound to the same
+  address. The Merkle leaf is what changes, not the wallet.
+- **Both authorities coexist permanently.** SSO revocation (e.g.
+  worker leaves the company) does not invalidate
+  `SelfNullifierAuthority`. The §3.11 post-employment recovery path
+  catches the symmetric case (worker who left *before* binding
+  Self).
+- **One AA per (human, employer) pair.** A worker employed at
+  three tenants in parallel has three AAs, one per tenant, each
+  with its own `PolisSessionAuthority` keyed off the respective
+  IdP's `polisSub`. Binding Self at any one of them does **not**
+  link the three — each AA's `SelfNullifierAuthority` is the same
+  nullifier, but the per-tenant `companyScopeSalt` keeps the
+  three sovereign pseudonyms unlinkable (rev-7.1
+  `ENTERPRISE_MODULE_PLAN.md` §3.3 limit row + §3.4 of this doc).
+- **Idempotent on E7.** A repeat `addAuthority(SelfNullifierAuthority)`
+  for an already-bound AA reverts with `AuthorityAlreadyBound`.
+
+The SDK error surface gains one new typed error:
+
+```ts
+// cofferdam-sdk/packages/core/src/errors.ts (rev-7.1 addition)
+export class AuthorityAlreadyBoundError extends CofferdamError {
+  constructor(
+    public readonly account: Address,
+    public readonly authority: 'PolisSession' | 'SelfNullifier',
+  ) { super(`Authority ${authority} already bound to ${account}`) }
+}
+```
+
+### 3.11 Post-employment Self-bind recovery ceremony (rev-7.1)
+
+The flow at §3.10 covers the **happy path**: worker is employed,
+binds Self while still under active SSO. This subsection covers
+the **hard case**: worker has *left* the employer (SSO revoked,
+`PolisSessionAuthority` no longer mints a valid token), but
+**holds a balance** in their company-bound AA — payroll deposited
+to AA-x before revocation, or escrow releases that landed in the
+days/weeks before termination cascaded through the SCIM pipeline.
+
+The funds are not lost. The recovery ceremony makes them
+reachable.
+
+#### 3.11.1 The structural invariant that makes recovery possible
+
+The company-bound pseudonym is derived as:
+
+```
+companyBoundPseudonym = keccak256(
+  companyScopeSalt || polisSub || "cofferdam-company-pseudonym-v1"
+)
+```
+
+`companyScopeSalt` is held by the `cofferdam-vault` Worker for as
+long as the company exists — keyed by the global (domain-anchored)
+`companyAnchor` (rev-7.4), so it is the same secret across every consumer
+that serves the company (§3.4 of this doc — the scope-salt lifecycle is
+otherwise the same as for sovereign per-app pseudonyms).
+`polisSub` was stable for the worker at their former employer and
+is preserved in the historical SCIM event stream
+(`ENTERPRISE_MODULE_PLAN.md` §5.5). So the vault can always
+**reconstruct the dormant `companyBoundPseudonym` leaf** for any
+former worker and prove its inclusion in a historical OrgRoot.
+
+The part that is *not* cryptographic — and this matters — is
+linking "the human holding this fresh Self nullifier" to "the
+human behind that dormant leaf." At company-bound deploy time the
+worker had **no** Self nullifier, so no on-chain binding between
+`polisSub` and any nullifier was ever recorded. There is nothing
+to re-derive. The match is therefore **attester-asserted**, in
+exactly the same trust class as the bind attester (§8): the
+`cofferdam-attester` Worker compares the Self disclosure
+(name + nationality + DOB, selectively disclosed during the R2
+prove) against the former employer's HR / SCIM record for that
+`polisSub`, and — on a confident match — signs a recovery
+authorisation binding *this nullifier* to *this account*. The
+on-chain contract does not, and cannot, perform the human-match;
+it verifies the attester vouched for it (check `(b)`) and that the
+target account's leaf was genuinely enrolled (check `(c)`).
+
+Concretely: a former worker, holding only their personal devices
+and a fresh Self.xyz passport scan, can reach `AA-x` because (1)
+the vault re-builds the dormant `companyBoundPseudonym` leaf and
+its Merkle inclusion proof from `companyScopeSalt + polisSub`, (2)
+the attester confirms the Self disclosure matches the HR record
+the leaf was minted from, and (3) the account contract verifies
+both on-chain before handing over control. The trust assumption
+is identical to the one already accepted for the bind path — no
+new trusted party is introduced.
+
+#### 3.11.2 The ceremony, end to end
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│  R1. Former worker installs Cofferdam RN app (if not already      │
+│      installed). Opens "Company Bindings" → "Recover orphaned     │
+│      wallet" (UX shipped in cofferdam-app, surfaced via the       │
+│      §3.3.4 dashboard banner when ENTERPRISE_MODULE_PLAN's banner │
+│      threshold is crossed — i.e. > $100 USDC in a company-bound   │
+│      AA whose worker has not Self-bound).                         │
+│      ↓                                                            │
+│  R2. App walks the standard Self.xyz NFC + Container prove        │
+│      (§3 steps 6–7), disclosing name + nationality + DOB.         │
+│      Container returns (proof, nullifier, publicInputs,           │
+│      disclosedAttrs).                                             │
+│      ↓                                                            │
+│  R3. App calls cofferdam-vault recovery endpoint:                 │
+│        POST /v1/recover-orphaned-wallet                           │
+│        { employerRef, nullifier, proof, publicInputs,            │
+│          disclosedAttrs }                                         │
+│      Vault, holding companyScopeSalt + the historical SCIM        │
+│      stream, enumerates candidate dormant leaves for employerRef  │
+│      and matches the disclosed (name, nationality, DOB) against   │
+│      the HR record behind each leaf's polisSub. On a confident    │
+│      match it identifies the target leaf:                         │
+│        companyBoundPseudonym = keccak256(                         │
+│          companyScopeSalt || polisSub ||                          │
+│          "cofferdam-company-pseudonym-v1")                        │
+│      NOTE: this is an attester-asserted human match, NOT a        │
+│      cryptographic re-derivation — see §3.11.1.                   │
+│      ↓                                                            │
+│  R4. On a confident match, attester signs a recovery message      │
+│      and Worker returns:                                          │
+│        {                                                          │
+│          aaAddress: AA-x,                                         │
+│          companyBoundPseudonym: <the dormant leaf value>,        │
+│          orgRoot: <historical generation the leaf was in>,       │
+│          merkleProof: <inclusion proof of the leaf under orgRoot>,│
+│          attesterSignature: <attester sig over                    │
+│            (AA-x, nullifier, companyBoundPseudonym, orgRoot)>     │
+│        }                                                          │
+│      ↓                                                            │
+│  R5. App submits the recovery tx, paymaster-sponsored:            │
+│        AA-x.recoverWithSelf(                                      │
+│          { nullifier, proof, publicInputs, attester, attesterSig,│
+│            employerRef, companyBoundPseudonym, orgRoot,           │
+│            merkleProof }                                          │
+│        )                                                          │
+│      Contract:                                                    │
+│        (a) Groth16 verify of the proof — REAL check.              │
+│        (b) attester allowlist (SelfAttesterRegistry) + signature  │
+│            over (AA-x, nullifier, companyBoundPseudonym, orgRoot).│
+│            THIS is where the human-match is vouched for.          │
+│        (c) Merkle inclusion: companyBoundPseudonym is under       │
+│            orgRoot, and orgRoot is a generation the tenant        │
+│            genuinely emitted (CofferdamCorporateRegistry).        │
+│        (d) Replaces ALL authority modules with                    │
+│            SelfNullifierAuthority(nullifier). PolisSessionAuthority│
+│            is removed (the IdP can never again issue a valid      │
+│            token; keeping the module would be dead weight), and   │
+│            the nullifier is bound in NullifierRegistry in the     │
+│            same tx. The replacement is atomic — failure of any    │
+│            check reverts the whole thing.                         │
+│      ↓                                                            │
+│  R6. Recovery complete. AA-x is now under exclusive control of    │
+│      the worker's sovereign identity. They can move the USDC,     │
+│      off-ramp via §3.5 step 3 of cofferdam-app/ARCHITECTURE.md,   │
+│      or hold. The Merkle org tree continues to show AA-x at the   │
+│      worker's former role *as a historical attestation* — that's │
+│      a feature, not a bug; future witness queries return correct │
+│      historical roles for any contract signed prior to            │
+│      termination.                                                 │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+#### 3.11.3 Edge cases this ceremony does NOT cover
+
+`ENTERPRISE_MODULE_PLAN.md` §3.3.4 is honest about the residual
+gap. Restated here in SDK terms:
+
+- **Worker held no balance.** The recovery flow is unnecessary;
+  the AA just becomes a dead address.
+- **Worker held a balance AND cannot pass Self.xyz** (undocumented
+  worker with no recoverable national credential). This is the
+  only fully-unrecoverable case. Mitigation is *forward-looking*:
+  the dashboard banner that fires above the $100 threshold makes
+  it visible *before* termination is plausible, giving workers
+  agency to bind Self while they still hold valid corporate SSO.
+- **Tenant has shut down between worker termination and recovery
+  attempt.** The `companyScopeSalt` is still held by
+  `cofferdam-vault` (the tenant's existence is independent of
+  whether they're still actively serving the dashboard), so this
+  case works. We document this explicitly in the operations
+  runbook — `companyScopeSalt` rows in the vault are
+  **archive-class**, never expired solely on tenant churn.
+- **`cofferdam-vault` itself has lost the salt.** Catastrophic
+  and out-of-scope. The salts are backed up on the same cadence
+  as the `cofferdam-attester` signing key. If we lose either, we
+  have a far larger problem than enterprise-orphan recovery.
+
+#### 3.11.4 SDK API surface
+
+```ts
+// @cofferdam/sdk-enterprise — packages/enterprise/src/recovery.ts
+
+export interface RecoverOrphanedWalletRequest {
+  /** ENS-or-domain of the former employer. */
+  employerRef: string
+  /** Self.xyz proof produced inline by CofferdamNativeProvider. */
+  proof: Hex
+  nullifier: Hex
+  publicInputs: bigint[]
+}
+
+export interface RecoverOrphanedWalletResponse {
+  /** The orphaned AA reclaimed. */
+  aaAddress: Address
+  /** Tx hash of the recoverWithSelf submission. */
+  txHash: Hex
+  /** USDC balance the worker can now move. */
+  reclaimedBalance: bigint
+  /** True if the AA was already under sovereign control (idempotent). */
+  alreadyRecovered: boolean
+}
+
+export async function recoverOrphanedWallet(
+  req: RecoverOrphanedWalletRequest,
+): Promise<RecoverOrphanedWalletResponse>
+```
+
+Lives in `@cofferdam/sdk-enterprise` because the
+`employerRef` lookup is enterprise-scoped — the function calls
+the `cofferdam-vault` `/v1/recover-orphaned-wallet` endpoint
+documented in `ENTERPRISE_MODULE_PLAN.md` §5 (the
+`POST /me/recover-orphaned-wallet` route added in the rev-7.1
+patch).
+
+#### 3.11.5 The `recoverWithSelf` contract method
+
+The on-chain endpoint that the §3.11.2 R5 step calls. It lives on
+the **AA account contract** itself (the ZKSync Era smart account
+deployed at E3 of §3.10), *not* on `NullifierRegistry` — the
+nullifier registry binding is unchanged; what `recoverWithSelf`
+mutates is the calling account's own authority-module set. The
+method is the recovery-path sibling of the §3.10 E7
+`addAuthority(SelfNullifierAuthority)` call; the contrast is the
+whole point:
+
+| | `addAuthority` (§3.10 E7, happy path) | `recoverWithSelf` (§3.11, orphan path) |
+|---|---|---|
+| **Precondition** | Worker still employed; active `PolisSessionAuthority` session signs the tx | Worker left; SSO revoked; no valid Polis token exists |
+| **Authority caller** | The AA's own `PolisSessionAuthority` | A fresh Self proof + Merkle inclusion proof; no existing authority can sign |
+| **Effect on `PolisSessionAuthority`** | Retained (OR semantics — both authorities coexist) | **Removed** (it's dead weight; the IdP can never re-issue) |
+| **Effect on `SelfNullifierAuthority`** | Added as a second module | Installed as the *sole* module |
+| **Net authority set after** | `{ PolisSession, SelfNullifier }` | `{ SelfNullifier }` |
+
+**Solidity surface** (lives on the account contract — see the
+contracts-repo cross-reference note below):
+
+```solidity
+// On the AA account contract (rev-7.1 authority-module model).
+// The account starts with PolisSessionAuthority installed at E3;
+// recoverWithSelf is the no-active-authority escape hatch.
+
+struct RecoverParams {
+    bytes32   nullifier;             // Self.xyz nullifier from the fresh prove
+    bytes     proof;                 // Groth16 proof bytes
+    uint256[] publicInputs;          // Self disclosure public signals
+    address   attester;              // Cofferdam attester address (must be allow-listed)
+    bytes     attesterSig;           // attester sig over (account, nullifier,
+                                     //   companyBoundPseudonym, orgRoot) — vouches the human-match
+    bytes32   employerRef;           // bytes32(domain) of the former employer
+    bytes32   companyBoundPseudonym; // the dormant leaf value the vault re-built:
+                                     //   keccak256(scopeSalt || polisSub || "...pseudonym-v1")
+    bytes32   orgRoot;               // historical OrgRoot generation the leaf was in
+    bytes32[] merkleProof;           // inclusion proof of companyBoundPseudonym under orgRoot
+}
+
+/// @notice Reclaim an orphaned company-bound AA after SSO revocation
+///         by proving sovereign Self identity matches the dormant leaf.
+/// @dev    Callable WITHOUT any existing authority signature — that's
+///         the point; the worker has lost SSO. Authorisation is the
+///         Groth16 proof + attester allow-list + Merkle inclusion.
+///         Atomic: any failed check reverts the entire call.
+function recoverWithSelf(RecoverParams calldata p) external;
+```
+
+**On-chain checks (all must pass; the call is atomic):**
+
+1. **`(a)` Groth16 proof verification.** `Verifier_vc_and_disclose`
+   (the same verifier `NullifierRegistry.bindNullifier` uses)
+   checks `p.proof` against `p.publicInputs`. A REAL ZK check, not
+   a trusted attestation. Reverts `InvalidProof`.
+2. **`(b)` Attester allow-list + human-match vouch.**
+   `SelfAttesterRegistry.isAuthorized(p.attester)` must be true,
+   and `p.attesterSig` must be a valid signature by `p.attester`
+   over `keccak256(address(this) || p.nullifier ||
+   p.companyBoundPseudonym || p.orgRoot)`. **This is the step that
+   carries the human-match** — the attester signs only after the
+   `cofferdam-vault` Worker has matched the Self disclosure
+   (name / nationality / DOB) against the HR record behind the
+   leaf's `polisSub` (§3.11.1). The contract trusts this assertion
+   in the same way the bind path trusts the attester; it does not
+   re-derive the link itself. Reverts `UnauthorizedAttester` /
+   `BadAttesterSig`.
+3. **`(c)` Leaf Merkle inclusion.** `p.companyBoundPseudonym` must
+   verify under `p.orgRoot` via `p.merkleProof`, and `p.orgRoot`
+   must be a generation that `CofferdamCorporateRegistry` actually
+   emitted for `p.employerRef` (checked against the registry's
+   historical-root set — see `ENTERPRISE_MODULE_PLAN.md` §6.B).
+   This proves the target account's leaf was a *genuinely
+   enrolled* company-bound identity, not a fabricated one — it
+   stops an attacker from pointing recovery at an arbitrary
+   address. Reverts `LeafNotAnchored`.
+4. **`(d)` Authority replacement.** On all checks passing, the
+   account **replaces** its entire authority-module set with a
+   single `SelfNullifierAuthority(p.nullifier)`. Any existing
+   `PolisSessionAuthority` is removed. After this call, only the
+   sovereign Self nullifier can sign for the account.
+
+**Idempotency.** If the account's sole authority is already
+`SelfNullifierAuthority(p.nullifier)` (e.g. an RPC retry after a
+stuck tx), the call is a no-op success — the SDK surfaces this as
+`alreadyRecovered: true` (§3.11.4). If the account is bound to a
+*different* nullifier, reverts `AccountUnderDifferentSovereign`
+(should be impossible — Self nullifiers are deterministic per
+passport).
+
+**Events:**
+
+```solidity
+event WalletRecoveredWithSelf(
+    address indexed account,
+    bytes32 indexed nullifier,
+    bytes32 indexed employerRef,
+    uint64  recoveredAt
+);
+event AuthorityReplaced(
+    address indexed account,
+    bytes32 removed,   // keccak256("PolisSessionAuthority")
+    bytes32 installed  // keccak256("SelfNullifierAuthority")
+);
+```
+
+**Paymaster sponsorship + anti-abuse.** `recoverWithSelf` is
+paymaster-sponsored so the orphaned worker needs no ETH (they may
+have only USDC in the dead wallet). Anti-abuse mirrors the
+`bindNullifier` policy in `contracts/WEB3_CONVERSION.md` §8:
+**one successful `recoverWithSelf` per account lifetime; 3 failed
+attempts per IP per day.** The attack surface is bounded by two
+independent gates: an attacker cannot point recovery at an
+arbitrary address (check `(c)` requires the target's
+`companyBoundPseudonym` leaf to be Merkle-anchored in a real
+historical OrgRoot Cofferdam emitted), *and* cannot impersonate a
+former worker (check `(b)` requires the `cofferdam-attester` to
+have vouched for the Self-disclosure ↔ HR-record human-match,
+which a Self proof from the wrong human fails). The weakest link
+is therefore the attester's off-chain matching quality — the same
+trust assumption already accepted for the bind path (§8) — not a
+forgeable on-chain primitive. The matching policy (what
+confidence threshold, what manual-review escalation for fuzzy
+name matches) is an operational concern documented in the
+`cofferdam-vault` runbook, not pinned in the contract.
+
+**Why it lives on the account, not the registry.** The nullifier
+↔ account binding in `NullifierRegistry` is *append-only and
+one-shot* by design (§3 idempotency). `recoverWithSelf` does not
+touch that binding — an orphaned company-bound AA was never bound
+in `NullifierRegistry` (it had no nullifier; its authority was
+`PolisSessionAuthority`). Recovery *establishes* the nullifier
+binding for the first time as a side effect: after check `(a)`
+passes, the account also calls
+`NullifierRegistry.bindNullifier(...)` for itself in the same tx
+(it now has a real nullifier), so post-recovery the account is a
+fully-ordinary sovereign account indistinguishable from one that
+took the §3 sovereign-first path.
+
+> **Contracts-repo cross-reference.** The AA account contract that
+> hosts `recoverWithSelf` (and `addAuthority` / `removeAuthority` /
+> the `PolisSessionAuthority` + `SelfNullifierAuthority` modules)
+> is the rev-7.1 generalisation of the passkey-validator stub
+> sketched at `contracts/WEB3_CONVERSION.md` §3.1
+> (`CofferdamAccountValidator.sol`). That contract is not yet
+> implemented; this subsection is its authoritative method-level
+> design spec until the Solidity lands under
+> `contracts/contracts/v1/zksync/`. See
+> `contracts/contracts/v1/zksync/README.md` → *Open items* for the
+> implementation tracking entry.
+
+### 3.12 Consumer password→passkey migration (rev-7.7)
+
+§3.10/§3.11 cover the *enterprise* (managed low-tier) path. This subsection
+covers the **consumer** path: an app — OffshoreSync (`react-server`) is the
+Tier-1 reference — that today authenticates users by **local password** or
+**Google/Apple OAuth** (`react-server/routes/auth.js`) and is wiring the SDK
+for account deployment. The whole point of passkeys is to remove a leakable
+shared secret from the database, so this flow converts those old-style logins
+into a **high-tier device passkey on an AA**, under the §2.5 ratchet.
+
+The UX target is the Uniswap in-app-wallet model (secure a wallet in a few
+taps with FaceID/TouchID/passkey; attach more login methods later) — but on
+**ZKSync Era native AA + Secure-Enclave passkey instead of Privy MPC**, and
+with **no seed phrase** (recovery is §2.5.3, never seed export).
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│  C1. Existing user signs in with their CURRENT method (local       │
+│      password, or Google/Apple). authProvider ∈ {'local',          │
+│      'google', 'apple'}; wallet.migrationStatus = 'pending'        │
+│      (WEB3_CONVERSION.md §5.4).                                    │
+│      ↓                                                            │
+│  C2. SDK signIn() finds no AA for this user. It does NOT deploy    │
+│      yet — the AA stays COUNTERFACTUAL (no funds, no on-chain      │
+│      authority) so a leaked credential has nothing to attack       │
+│      during the pending window. (Contrast §3.10 E3, where the      │
+│      employer-funded AA deploys early under the centrally-          │
+│      revocable PolisSessionAuthority.)                            │
+│      ↓                                                            │
+│  C3. SDK offers the passkey upgrade, picking a lane by capability: │
+│       (a) DEFAULT — QR handoff to the Cofferdam RN app             │
+│           (CofferdamAppProvider, §2.2): the hardware-bound,        │
+│           air-gapped Secure-Enclave passkey is the canonical,      │
+│           portable signer.                                        │
+│       (b) OPT-IN per consumer — an in-browser platform-            │
+│           authenticator passkey, first-party origin only (§2.3),   │
+│           accepting that it is origin-bound / non-portable.        │
+│      If hardware is not passkey-capable, or the in-browser passkey │
+│      is not reliable for the use case, lane (a) is mandatory.      │
+│      ↓                                                            │
+│  C4. In the SAME session, the low-tier authority authorises the    │
+│      first-passkey enrolment + counterfactual deploy in one flow:  │
+│        deploy({ validator: CofferdamAccountValidator,          │
+│                 bootstrap:  <password | oauth session authority>,  │
+│                 initialPasskey: <P-256 pubkey> })                 │
+│      The validator registers the passkey as HIGH tier and fires    │
+│      the §2.5.2 ratchet: the low-tier authority is permanently     │
+│      locked out of add/remove-authority.                          │
+│      ↓                                                            │
+│  C5. SDK prompts a BACKUP (§2.5.3): add a second device passkey    │
+│      and/or bind Self.xyz. Without it a single-device user has no  │
+│      recovery — surfaced honestly here, not at loss.              │
+│      ↓                                                            │
+│  C6. Server flips authProvider → 'zksync-passkey' and             │
+│      wallet.migrationStatus → 'enrolled'. The password is demoted  │
+│      to a disabled/break-glass credential per the WEB3_CONVERSION  │
+│      §7 release ladder (legacy → passkey-default → disabled).    │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+**Properties of this flow:**
+
+- **Counterfactual until the high-tier key exists.** The window in which only
+  an untrusted low-tier authority guards the AA collapses to the single
+  enrolment session; there is nothing fundable to steal before then.
+- **Per-user and resumable.** `wallet.migrationStatus` (`pending` →
+  `enrolled` | `declined`) drives the WEB3_CONVERSION §7 release ladder. A
+  `pending`/`declined` user keeps a counterfactual AA and is re-prompted; any
+  funds that arrive wait at the counterfactual address.
+- **Priority by authProvider.** `local` (password) is the leak surface and
+  migrates first; `google`/`apple` carry no stored secret on our side but
+  still need an AA + high-tier passkey, so they take the same path with lower
+  urgency. New users are passkey-first and never hold a password.
+- **Reconciliation is NOT triggered here.** Multi-device reconciliation (§7;
+  `ARCHITECTURE.md` §3.6) fires **only** on a Self.xyz nullifier collision,
+  never from a password/social/SSO login. A migrated user who later QR-signs
+  with their RN-app passkey simply makes one passkey an authority on a second
+  AA — that is not a merge. Reconciliation stays off the migration path.
 
 ## 4. Cloudflare Container Self prover — image specification
 
@@ -611,6 +1341,51 @@ breaks in the field.
 
 ## Change log
 
+- **2026-06-01 — rev 7.1 alignment patch.** Extends the doc to
+  cover the two-tier identity binding introduced by
+  `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §3.3.
+  Added: §2.4 `CofferdamEnterpriseProvider` (a third provider
+  variant whose authority root is a Polis SSO ID-token, not a
+  device passkey — used by `react-enterprise/` to bootstrap an
+  AA on first SSO sign-in without any Self.xyz dependency);
+  §2.4.1 *Why three providers and not two* (justification for the
+  new variant + a one-glance mapping of provider → authority root
+  → onboarding event); §3.10 *The enterprise-flavoured bind flow*
+  (the E1–E9 sequence: Polis sign-in → company-bound AA deploy →
+  later opt-in Self-bind via `AA.addAuthority(SelfNullifierAuthority)`
+  with OR semantics, with the pseudonym swap in the Merkle leaf
+  but the AA address stable); §3.11 *Post-employment Self-bind
+  recovery ceremony* (the R1–R6 sequence for reclaiming an
+  orphaned company-bound AA after SSO revocation, using an
+  attester-vouched human-match + Merkle inclusion of the dormant
+  company-bound pseudonym leaf in a historical OrgRoot + a fresh
+  Self.xyz proof to atomically replace `PolisSessionAuthority`
+  with `SelfNullifierAuthority`); §3.11.3 honest edge-case list
+  (the only fully-unrecoverable case is worker-held-balance + no
+  Self.xyz credential); §3.11.4 SDK API surface
+  (`recoverOrphanedWallet(...)` in `@cofferdam/sdk-enterprise`);
+  §3.11.5 the `recoverWithSelf` **contract-method spec** — full
+  Solidity surface (`RecoverParams` struct + signature), the four
+  atomic on-chain checks (Groth16 verify, attester allow-list +
+  human-match vouch, company-bound-pseudonym-leaf Merkle
+  inclusion, authority replacement),
+  idempotency, events (`WalletRecoveredWithSelf` /
+  `AuthorityReplaced`), paymaster-sponsorship + anti-abuse policy,
+  and a contrast table against the §3.10 E7 `addAuthority`
+  happy-path call. The spec is authoritative for the AA-account
+  contract until the Solidity lands under
+  `contracts/contracts/v1/zksync/` (tracked in that dir's README
+  *Open items*). New typed error `AuthorityAlreadyBoundError`
+  added to the SDK core errors list. Header front-matter status block adds a
+  rev-7.1 paragraph cross-linking the alignment context.
+  Nothing changes in §4 (Container spec) onward — the Container,
+  the privacy parameters, `parseDocument`, the multi-device
+  primitives, and the trust model are all stack-decision
+  invariants that the enterprise variant inherits without
+  modification. The §3.10 + §3.11 flows reuse the *exact* §3
+  Container + attester pipeline; the only delta is which AA is
+  being targeted by the bind tx and which authority module the
+  tx installs.
 - **2026-05-30 — rev 1 (initial).** First write of the T1.1
   design doc. Captures the rev-6 stack decision: v2 on-ZKSync via
   Cloudflare Container Self prover, Workers AI Gemma-4-26B-A4B for
