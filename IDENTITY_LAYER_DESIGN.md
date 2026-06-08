@@ -374,14 +374,17 @@ of these steps.
 │     - Returns: { attesterSignature, attesterAddress }.            │
 │     ↓                                                             │
 │  8. RN app submits to ZKSync Era v2 NullifierRegistry:            │
-│       NullifierRegistry.bindNullifier(                            │
+│       NullifierRegistry.verifyAndBind(                            │
 │         account: AA-x,                                            │
-│         nullifier: n,                                             │
-│         proof: groth16Bytes,                                      │
-│         publicInputs: [...],                                      │
-│         attester: attesterAddress,                                │
+│         a, b, c: groth16ProofPoints,                              │
+│         pubSignals: uint256[21],  // nullifier = pubSignals[7],   │
+│                                   // userIdentifier = [20] = AA-x │
 │         attesterSig: attesterSignature                            │
 │       )                                                           │
+│     - The nullifier is NOT a separate arg: it is carried inside   │
+│       pubSignals and bound to AA-x via pubSignals[USER_IDENTIFIER]│
+│       == uint160(account). The attester address is RECOVERED from │
+│       attesterSig, not passed.                                    │
 │     - Contract: (a) Groth16 verifier checks proof — REAL check,  │
 │       not a trusted attestation; (b) SelfAttesterRegistry.        │
 │       isAuthorized(attester) check — guarantees attester is       │

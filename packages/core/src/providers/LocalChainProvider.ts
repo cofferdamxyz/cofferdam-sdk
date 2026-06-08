@@ -20,7 +20,7 @@
 //      goes through the cofferdam-prover Cloudflare Container (produces
 //      Groth16 proof) + cofferdam-attester Worker (signs the bind message
 //      against `v2/self/SelfAttesterRegistry`-registered key) + the user's
-//      AA tx submitting to `v2/self/NullifierRegistry.bindNullifier`. Full
+//      AA tx submitting to `v2/self/NullifierRegistry.verifyAndBind`. Full
 //      flow in cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3. Legacy α-2 / α-3
 //      LayerZero ingress (`CofferdamReceiver._lzReceive`) remains
 //      deployed on-chain but is not the production path post-rev-6.
@@ -103,7 +103,7 @@ export interface LocalChainProviderConfig {
    * Receiver-owner private key. If provided, `signIn()` will bind the user's
    * derived account on-chain (simulating the production v2 attester flow:
    * cofferdam-prover Container → cofferdam-attester Worker →
-   * NullifierRegistry.bindNullifier on ZKSync Era). Without it, binding is
+   * NullifierRegistry.verifyAndBind on ZKSync Era). Without it, binding is
    * the caller's responsibility and `signIn()` just returns an unbound
    * address.
    *

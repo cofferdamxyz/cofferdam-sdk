@@ -14,6 +14,19 @@ export {
   type LocalChainProviderConfig,
 } from './providers/LocalChainProvider.js'
 export {
+  NativeAccountProvider,
+  type NativeAccountProviderConfig,
+  type NativeTxRequest,
+} from './providers/NativeAccountProvider.js'
+export {
+  DeterministicPasskeySigner,
+  encodePasskeyConfig,
+  p256PublicKey,
+  signP256Digest,
+  type PasskeySigner,
+  type P256PublicKey,
+} from './identity/passkey.js'
+export {
   mockProfiles,
   getMockProfile,
   type MockProfile,

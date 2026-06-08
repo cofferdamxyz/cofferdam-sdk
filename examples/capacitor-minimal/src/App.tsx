@@ -23,6 +23,13 @@
 //                              admin's faucet ETH doesn't drain), and
 //                              clickable block-explorer links on every tx.
 //
+//   - `native-aa`       (α-4): real NativeAccountProvider against the native
+//                              ZKSync Era AA stack. Sign-in derives a High-tier
+//                              P-256 passkey + the CofferdamSmartAccount's
+//                              counterfactual address; the account deploys via
+//                              the factory and transacts gaslessly through the
+//                              CofferdamPaymaster. Reads VITE_NATIVE_* env.
+//
 // All modes share the same SDK; only the provider construction differs.
 
 import {
@@ -37,8 +44,9 @@ import {
 } from '@cofferdam/sdk-react'
 
 import { LocalChainDemo } from './LocalChainDemo'
+import { NativeAccountDemo } from './NativeAccountDemo'
 
-type NetworkMode = 'mock' | 'local-chain' | 'sepolia-testnet'
+type NetworkMode = 'mock' | 'local-chain' | 'sepolia-testnet' | 'native-aa' | 'native-aa-testnet'
 
 const NETWORK_MODE: NetworkMode =
   (import.meta.env.VITE_COFFERDAM_NETWORK as NetworkMode | undefined) ?? 'mock'
@@ -107,6 +115,12 @@ export default function App() {
   }
   if (NETWORK_MODE === 'sepolia-testnet') {
     return <LocalChainDemo chain="testnet" />
+  }
+  if (NETWORK_MODE === 'native-aa') {
+    return <NativeAccountDemo chain="local" />
+  }
+  if (NETWORK_MODE === 'native-aa-testnet') {
+    return <NativeAccountDemo chain="testnet" />
   }
   return <MockDemo />
 }

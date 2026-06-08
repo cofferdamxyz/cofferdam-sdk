@@ -9,6 +9,8 @@
     "dev": "vite",
     "dev:local-chain": "VITE_COFFERDAM_NETWORK=local-chain vite",
     "dev:sepolia-testnet": "VITE_COFFERDAM_NETWORK=sepolia-testnet vite",
+    "dev:native-aa": "VITE_COFFERDAM_NETWORK=native-aa vite",
+    "dev:native-aa-testnet": "VITE_COFFERDAM_NETWORK=native-aa-testnet vite",
     "tail": "node scripts/tail-chain.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
