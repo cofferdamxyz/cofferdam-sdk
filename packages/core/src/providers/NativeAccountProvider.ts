@@ -40,6 +40,7 @@ import {
   type PasskeySigner,
   type P256PublicKey,
 } from '../identity/passkey.js'
+import { bytesToBase64url } from '../identity/webauthn.js'
 import { SignInRejected } from './MockProvider.js'
 import type {
   AuthorityState,
@@ -474,10 +475,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function encodeSessionToken(payload: object): string {
-  const json = JSON.stringify(payload)
-  const bytes = new TextEncoder().encode(json)
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)
-  const b64 = btoa(binary)
-  return `native.${b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`
+  // Portable base64url (no `btoa` — unavailable in React Native).
+  const bytes = new TextEncoder().encode(JSON.stringify(payload))
+  return `native.${bytesToBase64url(bytes)}`
 }

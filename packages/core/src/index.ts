@@ -27,6 +27,19 @@ export {
   type P256PublicKey,
 } from './identity/passkey.js'
 export {
+  WebAuthnPasskeySigner,
+  softwareWebAuthnAuthenticator,
+  softwareWebAuthnPublicKey,
+  p256PublicKeyFromDer,
+  derSignatureToRS,
+  encodeWebAuthnInnerSignature,
+  webAuthnConfig,
+  base64urlToBytes,
+  bytesToBase64url,
+  type WebAuthnAssertion,
+  type WebAuthnAuthenticator,
+} from './identity/webauthn.js'
+export {
   mockProfiles,
   getMockProfile,
   type MockProfile,
