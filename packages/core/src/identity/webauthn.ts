@@ -19,9 +19,14 @@
 // platform SDK.
 
 import { p256 } from '@noble/curves/p256'
-import { AbiCoder, getBytes, hexlify, sha256 } from 'ethers'
+import { AbiCoder, concat, getBytes, hexlify, sha256 } from 'ethers'
 
-import { encodePasskeyConfig, type P256PublicKey, type PasskeySigner } from './passkey.js'
+import {
+  encodePasskeyConfig,
+  type P256PublicKey,
+  type PasskeySigner,
+  type PasskeySignatureScheme,
+} from './passkey.js'
 
 const abi = AbiCoder.defaultAbiCoder()
 
@@ -159,6 +164,76 @@ export function encodeWebAuthnInnerSignature(assertion: WebAuthnAssertion): stri
   )
 }
 
+/** A decoded `WebAuthn.WebAuthnAuth` blob (the inverse of `encodeWebAuthnInnerSignature`). */
+export interface DecodedWebAuthnAuth {
+  r: string
+  s: string
+  challengeIndex: number
+  typeIndex: number
+  authenticatorData: Uint8Array
+  clientDataJSON: string
+}
+
+/** Decode an `abi.encode(WebAuthn.WebAuthnAuth)` blob back into its fields. */
+export function decodeWebAuthnInnerSignature(blob: string): DecodedWebAuthnAuth {
+  const [r, s, challengeIndex, typeIndex, authenticatorData, clientDataJSON] = abi.decode(
+    ['bytes32', 'bytes32', 'uint256', 'uint256', 'bytes', 'string'],
+    blob,
+  ) as unknown as [string, string, bigint, bigint, string, string]
+  return {
+    r,
+    s,
+    challengeIndex: Number(challengeIndex),
+    typeIndex: Number(typeIndex),
+    authenticatorData: getBytes(authenticatorData),
+    clientDataJSON,
+  }
+}
+
+/**
+ * Off-chain mirror of the on-chain `WebAuthnPasskeyAuthority` check: verify that
+ * `blob` is a WebAuthn assertion by `pub` over `expectedChallenge` (the 32-byte
+ * digest). Confirms `type == "webauthn.get"`, the embedded `challenge` equals
+ * `base64url(expectedChallenge)`, and the P-256 signature over
+ * `sha256(authenticatorData || sha256(clientDataJSON))` validates against `pub`.
+ * Returns false (never throws) on any malformed input or mismatch.
+ */
+export function verifyWebAuthnAssertion(
+  blob: string,
+  expectedChallenge: Uint8Array,
+  pub: P256PublicKey,
+): boolean {
+  let auth: DecodedWebAuthnAuth
+  try {
+    auth = decodeWebAuthnInnerSignature(blob)
+  } catch {
+    return false
+  }
+
+  let parsed: { type?: unknown; challenge?: unknown }
+  try {
+    parsed = JSON.parse(auth.clientDataJSON) as { type?: unknown; challenge?: unknown }
+  } catch {
+    return false
+  }
+  if (parsed.type !== 'webauthn.get') return false
+  if (parsed.challenge !== bytesToBase64url(getBytes(expectedChallenge))) return false
+
+  const clientDataHash = getBytes(sha256(new TextEncoder().encode(auth.clientDataJSON)))
+  const signedBase = new Uint8Array(auth.authenticatorData.length + clientDataHash.length)
+  signedBase.set(auth.authenticatorData, 0)
+  signedBase.set(clientDataHash, auth.authenticatorData.length)
+  const messageHash = getBytes(sha256(signedBase))
+
+  try {
+    const sig = getBytes(concat([auth.r, auth.s]))
+    const point = getBytes(concat(['0x04', pub.qx, pub.qy]))
+    return p256.verify(sig, messageHash, point)
+  } catch {
+    return false
+  }
+}
+
 // ── Signer ─────────────────────────────────────────────────────────────────
 
 /**
@@ -174,6 +249,8 @@ export function encodeWebAuthnInnerSignature(assertion: WebAuthnAssertion): stri
  * returns as `abi.encode(authorityId, innerSignature)`.
  */
 export class WebAuthnPasskeySigner implements PasskeySigner {
+  readonly scheme: PasskeySignatureScheme = 'webauthn'
+
   constructor(
     private readonly pubKey: P256PublicKey,
     private readonly authenticator: WebAuthnAuthenticator,

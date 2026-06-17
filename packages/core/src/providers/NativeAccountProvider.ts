@@ -23,7 +23,7 @@
 // `sendTransaction()` submits a native type-113 AA transaction signed by the
 // passkey and (by default) sponsored by the paymaster, so the user pays no gas.
 
-import { AbiCoder, getBytes, keccak256, toUtf8Bytes, Contract as EthContract } from 'ethers'
+import { AbiCoder, getBytes, keccak256, toUtf8Bytes, Contract as EthContract, Interface } from 'ethers'
 import {
   Provider as ZkProvider,
   Wallet as ZkWallet,
@@ -41,9 +41,12 @@ import {
   type P256PublicKey,
 } from '../identity/passkey.js'
 import { bytesToBase64url } from '../identity/webauthn.js'
+import { signSessionAttestation } from '../identity/sessionAttestation.js'
 import { SignInRejected } from './MockProvider.js'
 import type {
+  AuthorityKind,
   AuthorityState,
+  AuthorityTier,
   CofferdamProvider,
   DeviceCapability,
   NetworkMode,
@@ -64,12 +67,71 @@ const FACTORY_ABI = [
   'function deployAccount(bytes32 salt, address initialModule, bytes initialConfig) returns (address)',
 ] as const
 
-/** Minimal account ABI for on-chain authority reads. */
+/** Minimal account ABI for on-chain authority reads + management self-calls. */
 const ACCOUNT_ABI = [
   'function passkeyCount() view returns (uint256)',
   'function upgradeLocked() view returns (bool)',
   'function authorityCount() view returns (uint256)',
+  'function getAuthority(uint256 authorityId) view returns (address module, uint8 tier, bool active, bytes config)',
+  'function addAuthority(address newModule, bytes newConfig) returns (uint256 newAuthorityId)',
+  'function revokeAuthority(uint256 targetId)',
 ] as const
+
+/** Encoder for the management self-call calldata (addAuthority / revokeAuthority). */
+const ACCOUNT_IFACE = new Interface(ACCOUNT_ABI as unknown as string[])
+
+/**
+ * Client-side mirror of the on-chain `MAX_PASSKEYS` cap (AuthorityManagerBase).
+ * The contract is the real enforcer; this lets the UI fail fast without gas.
+ */
+export const MAX_PASSKEYS = 3
+
+/** Map the on-chain `Tier` enum (None/LowUntrusted/LowManaged/High) to the SDK tier. */
+const TIER_BY_ENUM: Record<number, AuthorityTier | null> = {
+  0: null, // Tier.None — a never-populated slot.
+  1: 'low_untrusted',
+  2: 'low_managed',
+  3: 'high',
+}
+
+function kindForRecord(tier: AuthorityTier, isPasskey: boolean): AuthorityKind {
+  if (isPasskey || tier === 'high') return 'passkey'
+  if (tier === 'low_managed') return 'polis_sso'
+  return 'password' // best-effort label for an untrusted low-tier authority
+}
+
+/** A single entry in the account's on-chain authority registry. */
+export interface AuthorityRecord {
+  /** Index in the registry — the `authorityId` used to sign / revoke. */
+  id: number
+  /** Authority module contract address. */
+  module: string
+  /** Trust tier of this authority. */
+  tier: AuthorityTier
+  /** Best-effort authority kind for UI labelling. */
+  kind: AuthorityKind
+  /** False once revoked. */
+  active: boolean
+  /** True when the module is the configured passkey module (a device passkey). */
+  isPasskey: boolean
+  /** True when this record's config matches THIS provider's signer public key. */
+  isSelf: boolean
+  /** Opaque per-account authority config blob (abi.encode(qx,qy) for passkeys). */
+  config: string
+}
+
+/**
+ * Thrown client-side before submitting a 4th passkey, mirroring the contract's
+ * `PasskeyCapReached` revert so the UI can fail fast without spending gas.
+ */
+export class PasskeyCapReachedError extends Error {
+  constructor(
+    message = `[cofferdam-sdk] cannot add another passkey: the account is at the ${MAX_PASSKEYS}-passkey cap (revoke one first).`,
+  ) {
+    super(message)
+    this.name = 'PasskeyCapReachedError'
+  }
+}
 
 export interface NativeAccountProviderConfig {
   /** Consumer-app identifier (e.g. 'offshoresync'). */
@@ -114,6 +176,21 @@ export interface NativeAccountProviderConfig {
    */
   deployerPrivateKey?: string
 
+  /**
+   * Authority id this provider's signer occupies on the account. The bootstrap
+   * passkey is id 0 (the default). A backup device should set this, pass
+   * `authorityId` per tx, or call `resolveOwnAuthorityId()` to discover it.
+   */
+  authorityId?: number
+
+  /**
+   * Override the counterfactual account address. A backup device does NOT derive
+   * the account (its key differs from the bootstrap key); it is told the
+   * canonical address out-of-band (the QR handoff / reconciliation flow) and
+   * passes it here so all reads/txs target the shared account.
+   */
+  accountAddress?: string
+
   /** Sponsor user txs via the paymaster. Default: true when `paymaster` is set. */
   usePaymaster?: boolean
 
@@ -142,6 +219,7 @@ interface ResolvedConfig {
   userId: string
   deployerPrivateKey: string | null
   usePaymaster: boolean
+  authorityId: number
   autoDeploy: boolean
   defaultGasLimit: bigint
   verified: boolean
@@ -158,6 +236,11 @@ export interface NativeTxRequest {
   gasLimit?: bigint
   /** Override paymaster sponsorship for this tx. Defaults to provider setting. */
   usePaymaster?: boolean
+  /**
+   * Authority id whose passkey signs this tx. Defaults to the provider's
+   * configured `authorityId` (0 for the bootstrap device).
+   */
+  authorityId?: number
 }
 
 export class NativeAccountProvider implements CofferdamProvider {
@@ -186,6 +269,7 @@ export class NativeAccountProvider implements CofferdamProvider {
       userId: config.userId ?? 'native-user-default',
       deployerPrivateKey: config.deployerPrivateKey ?? null,
       usePaymaster: config.usePaymaster ?? Boolean(config.contracts.paymaster),
+      authorityId: config.authorityId ?? 0,
       autoDeploy: config.autoDeploy ?? false,
       defaultGasLimit: config.defaultGasLimit ?? 20_000_000n,
       verified: config.verified ?? true,
@@ -205,6 +289,9 @@ export class NativeAccountProvider implements CofferdamProvider {
     if (this.cachedBytecodeHash === null && this.config.contracts.aaBytecodeHash) {
       this.cachedBytecodeHash = this.config.contracts.aaBytecodeHash
     }
+    // A backup device is handed the canonical address; it cannot derive it (its
+    // key differs from the bootstrap key). Pin it so all reads/txs target it.
+    if (config.accountAddress) this.cachedAddress = config.accountAddress
   }
 
   // ── CofferdamProvider ───────────────────────────────────────────────────────
@@ -223,6 +310,24 @@ export class NativeAccountProvider implements CofferdamProvider {
 
     const appPseudonym = await derivePseudonym(this.config.scopeSalt, accountAddress)
     const scopeKey = await deriveScopeKey(`native-user:${this.config.userId}`, this.config.scope)
+    const issuedAt = Date.now()
+
+    // Passkey-signed envelope binding the security-relevant response fields, so
+    // a consumer can cryptographically verify the session origin (the holder of
+    // the account's passkey authorised it). Prompts the authenticator (biometric
+    // in production). Verify with `decodeAndVerifySessionAttestation`.
+    const attestation = await signSessionAttestation({
+      signer: this.signer,
+      publicKey: await this.publicKey(),
+      fields: {
+        scope: this.config.scope,
+        appPseudonym,
+        accountAddress,
+        chainId: this.config.chainId,
+        verified: this.config.verified,
+        issuedAt,
+      },
+    })
 
     return {
       appPseudonym,
@@ -235,11 +340,9 @@ export class NativeAccountProvider implements CofferdamProvider {
         appPseudonym,
         accountAddress,
         chainId: this.config.chainId,
-        issuedAt: Date.now(),
+        issuedAt,
       }),
-      // PoC attestation. β replaces this with a passkey signature over the
-      // response fields.
-      attestation: 'native-attestation-v1',
+      attestation,
       authority: { kind: 'passkey', tier: 'high' },
       migrationStatus: 'enrolled',
       accountDeployed: deployed,
@@ -387,15 +490,127 @@ export class NativeAccountProvider implements CofferdamProvider {
       base.gasLimit = await this.estimateGas(base)
     }
 
+    const authorityId = req.authorityId ?? this.config.authorityId
     const signedHash = EIP712Signer.getSignedDigest(base) as string
     const innerSignature = await this.signer.sign(getBytes(signedHash))
     base.customData!.customSignature = abi.encode(
       ['uint256', 'bytes'],
-      [0 /* passkey authority id */, innerSignature],
+      [authorityId, innerSignature],
     )
 
     const sent = await this.chainProvider.broadcastTransaction(utils.serializeEip712(base as never))
     return sent.wait()
+  }
+
+  // ── Authority management (multi-device) ─────────────────────────────────────
+
+  /**
+   * Enumerate the account's on-chain authority registry: every device passkey
+   * (High) plus any managed/Self authorities. Skips never-populated (`None`)
+   * slots. On a counterfactual (not-yet-deployed) account, returns the single
+   * bootstrap passkey at id 0.
+   */
+  async listAuthorities(): Promise<AuthorityRecord[]> {
+    const passkeyModule = this.config.contracts.passkeyModule.toLowerCase()
+    const ownConfig = (await this.bootstrapConfig()).toLowerCase()
+
+    if (!(await this.isDeployed())) {
+      return [
+        {
+          id: 0,
+          module: this.config.contracts.passkeyModule,
+          tier: 'high',
+          kind: 'passkey',
+          active: true,
+          isPasskey: true,
+          isSelf: true,
+          config: ownConfig,
+        },
+      ]
+    }
+
+    const account = new ZkContract(await this.getAccountAddress(), ACCOUNT_ABI, this.chainProvider)
+    const count = Number((await account.authorityCount()) as bigint)
+    const records: AuthorityRecord[] = []
+    for (let id = 0; id < count; id++) {
+      const [module, tierNum, active, config] = (await account.getAuthority(id)) as [
+        string,
+        bigint,
+        boolean,
+        string,
+      ]
+      const tier = TIER_BY_ENUM[Number(tierNum)]
+      if (!tier) continue // Tier.None — skip.
+      const isPasskey = module.toLowerCase() === passkeyModule
+      records.push({
+        id,
+        module,
+        tier,
+        kind: kindForRecord(tier, isPasskey),
+        active,
+        isPasskey,
+        isSelf: isPasskey && config.toLowerCase() === ownConfig,
+        config,
+      })
+    }
+    return records
+  }
+
+  /**
+   * Resolve the authority id whose config matches THIS provider's signer public
+   * key. The bootstrap device is id 0; a backup device discovers its own id
+   * (1/2) here so it can sign management txs. Throws if the key is not an active
+   * authority on the account.
+   */
+  async resolveOwnAuthorityId(): Promise<number> {
+    const mine = (await this.listAuthorities()).find((r) => r.isSelf && r.active)
+    if (!mine) {
+      throw new Error(
+        "[cofferdam-sdk] resolveOwnAuthorityId: this device's passkey is not an " +
+          'active authority on the account (was it revoked, or is this the wrong account?).',
+      )
+    }
+    return mine.id
+  }
+
+  /**
+   * Add a backup device passkey as a new High-tier authority via a self-call to
+   * `addAuthority`, authorised by `authorityId` (a High signer; default the
+   * provider's). Fails fast with `PasskeyCapReachedError` if already at the cap.
+   */
+  async addBackupPasskey(
+    pub: P256PublicKey,
+    opts: { authorityId?: number } = {},
+  ): Promise<types.TransactionReceipt> {
+    const state = await this.getAuthorityState()
+    if (state.passkeyCount >= MAX_PASSKEYS) throw new PasskeyCapReachedError()
+
+    const data = ACCOUNT_IFACE.encodeFunctionData('addAuthority', [
+      this.config.contracts.passkeyModule,
+      encodePasskeyConfig(pub),
+    ])
+    return this.sendTransaction({
+      to: await this.getAccountAddress(),
+      data,
+      authorityId: opts.authorityId,
+    })
+  }
+
+  /**
+   * Revoke (deactivate) an authority by id via a self-call to `revokeAuthority`,
+   * authorised by `authorityId` (a High signer; default the provider's). The
+   * contract decrements `passkeyCount` if the target was an active passkey.
+   */
+  async revokeAuthority(
+    targetId: number,
+    opts: { authorityId?: number } = {},
+  ): Promise<types.TransactionReceipt> {
+    const data = ACCOUNT_IFACE.encodeFunctionData('revokeAuthority', [targetId])
+    return this.sendTransaction({
+      to: await this.getAccountAddress(),
+      data,
+      authorityId: opts.authorityId,
+    })
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────

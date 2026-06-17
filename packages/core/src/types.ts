@@ -185,7 +185,14 @@ export interface SignInResponse {
   /** Short-lived token for follow-up SDK calls in this session. */
   sessionToken: string
 
-  /** Passkey-signed envelope binding the response. */
+  /**
+   * Passkey-signed envelope binding the security-relevant response fields
+   * (`scope`, `appPseudonym`, `accountAddress`, `chainId`, `verified`,
+   * `issuedAt`) so a consumer can cryptographically verify the session origin.
+   * A `csa1:`-prefixed token; decode + verify with
+   * `decodeAndVerifySessionAttestation`. (`MockProvider` returns an opaque
+   * placeholder that does not verify.)
+   */
   attestation: string
 
   /**

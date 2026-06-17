@@ -19,6 +19,8 @@ import {
   NativeAccountProvider,
   DeterministicPasskeySigner,
   encodePasskeyConfig,
+  decodeAndVerifySessionAttestation,
+  PasskeyCapReachedError,
   SignInRejected,
 } from '../src/index.js'
 
@@ -123,6 +125,15 @@ describe('NativeAccountProvider (integration)', () => {
     expect(result.appPseudonym).toMatch(/^cd_pseudo_[0-9a-f]{24}$/)
     expect(result.sessionToken).toMatch(/^native\./)
 
+    // The attestation is a real passkey-signed envelope over the response
+    // fields; it decodes, verifies, and pins to this session's scope/account.
+    expect(result.attestation).toMatch(/^csa1:/)
+    const att = decodeAndVerifySessionAttestation(result.attestation, {
+      expect: { scope: 'offshoresync', accountAddress: result.accountAddress, chainId: CHAIN_ID },
+    })
+    expect(att.alg).toBe('p256')
+    expect(att.appPseudonym).toBe(result.appPseudonym)
+
     // Cross-check the off-chain counterfactual against the on-chain factory.
     const { keccak256, toUtf8Bytes } = await import('ethers')
     const salt = keccak256(toUtf8Bytes(`cofferdam-native-account|${userId}`))
@@ -195,4 +206,69 @@ describe('NativeAccountProvider (integration)', () => {
     const provider = mkProvider(`nap-policy-${Date.now()}`, { verifiedClaims: { country: 'BR' } })
     await expect(provider.signIn({ allowedCountries: ['US'] })).rejects.toBeInstanceOf(SignInRejected)
   }, 30_000)
+
+  it('lists, adds (with ≤3 cap), revokes authorities and resolves a backup device id', async () => {
+    if (skip) return
+
+    // Fund the paymaster so every management self-call is gasless.
+    const chain = new ZkProvider(RPC_URL)
+    const deployer = new ZkWallet(DEPLOYER_PK, chain)
+    await (
+      await deployer.sendTransaction({ to: dep.paymaster, value: 3_000_000_000_000_000_000n })
+    ).wait()
+
+    const base = `nap-multi-${Date.now()}`
+    const primary = mkProvider(base)
+    const accountAddress = await primary.ensureDeployed()
+
+    // Bootstrap: a single self passkey at id 0.
+    let list = await primary.listAuthorities()
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({
+      id: 0,
+      tier: 'high',
+      kind: 'passkey',
+      active: true,
+      isPasskey: true,
+      isSelf: true,
+    })
+    expect(await primary.resolveOwnAuthorityId()).toBe(0)
+
+    // Add a backup passkey (a different key) → id 1.
+    const backupSigner = new DeterministicPasskeySigner(`${base}-backup`)
+    const backupPub = await backupSigner.publicKey()
+    await primary.addBackupPasskey(backupPub)
+
+    expect((await primary.getAuthorityState()).passkeyCount).toBe(2)
+    list = await primary.listAuthorities()
+    expect(list).toHaveLength(2)
+    expect(list[1]).toMatchObject({ id: 1, tier: 'high', isPasskey: true, active: true, isSelf: false })
+
+    // A provider standing in for the BACKUP device: same account, backup key.
+    const backup = mkProvider(`${base}-backup-dev`, {
+      signer: backupSigner,
+      accountAddress,
+    })
+    expect(await backup.resolveOwnAuthorityId()).toBe(1)
+    const backupView = await backup.listAuthorities()
+    expect(backupView.find((r) => r.id === 1)?.isSelf).toBe(true)
+    expect(backupView.find((r) => r.id === 0)?.isSelf).toBe(false)
+
+    // The backup device authorises adding a 3rd passkey with ITS own id.
+    const thirdPub = await new DeterministicPasskeySigner(`${base}-third`).publicKey()
+    await backup.addBackupPasskey(thirdPub, { authorityId: 1 })
+    expect((await primary.getAuthorityState()).passkeyCount).toBe(3)
+
+    // Cap: a 4th is refused client-side, before spending any gas.
+    const fourthPub = await new DeterministicPasskeySigner(`${base}-fourth`).publicKey()
+    await expect(primary.addBackupPasskey(fourthPub)).rejects.toBeInstanceOf(PasskeyCapReachedError)
+
+    // Revoking the backup (id 1) frees a slot and marks it inactive.
+    await primary.revokeAuthority(1)
+    expect((await primary.getAuthorityState()).passkeyCount).toBe(2)
+    expect((await primary.listAuthorities()).find((r) => r.id === 1)?.active).toBe(false)
+
+    // The revoked backup device can no longer resolve its (active) id.
+    await expect(backup.resolveOwnAuthorityId()).rejects.toThrow(/not an active authority/)
+  }, 240_000)
 })

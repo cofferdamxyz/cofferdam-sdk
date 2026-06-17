@@ -17,7 +17,7 @@
 // without the provider or contracts changing.
 
 import { p256 } from '@noble/curves/p256'
-import { AbiCoder, getBytes, hexlify } from 'ethers'
+import { AbiCoder, concat, getBytes, hexlify } from 'ethers'
 
 const abi = AbiCoder.defaultAbiCoder()
 
@@ -28,6 +28,17 @@ export interface P256PublicKey {
   /** Affine y coordinate (`qy`). */
   qy: string
 }
+
+/**
+ * Discriminates the byte format of a `PasskeySigner.sign()` output so verifiers
+ * know how to check it:
+ *   - `'p256'`     — a bare 64-byte `r || s` signature (this module's default,
+ *                    verified by the on-chain `PasskeyAuthority`).
+ *   - `'webauthn'` — an `abi.encode(WebAuthn.WebAuthnAuth)` assertion blob (what
+ *                    `WebAuthnPasskeySigner` returns, verified by the on-chain
+ *                    `WebAuthnPasskeyAuthority` / off-chain `verifyWebAuthnAssertion`).
+ */
+export type PasskeySignatureScheme = 'p256' | 'webauthn'
 
 /**
  * The signing seam for the native AA passkey authority. Implementations hold
@@ -42,6 +53,11 @@ export interface PasskeySigner {
    * string with low-s normalisation (as `PasskeyAuthority` requires).
    */
   sign(digest: Uint8Array): Promise<string>
+  /**
+   * Format of `sign()`'s output, so callers that persist a signature (e.g. the
+   * session attestation) can record how to verify it. Absent ⇒ treat as `'p256'`.
+   */
+  readonly scheme?: PasskeySignatureScheme
 }
 
 /** `abi.encode(bytes32 qx, bytes32 qy)` — the `PasskeyAuthority` config blob. */
@@ -72,6 +88,26 @@ export function signP256Digest(privateKey: Uint8Array, digest: Uint8Array): stri
 }
 
 /**
+ * Verify a raw 64-byte `r || s` P-256 signature (as produced by
+ * `signP256Digest`) over a 32-byte `digest` against `pub`. The inverse
+ * predicate of `signP256Digest`; mirrors the on-chain `PasskeyAuthority` check.
+ * Returns false (never throws) on any malformed input.
+ */
+export function verifyP256Digest(
+  pub: P256PublicKey,
+  digest: Uint8Array,
+  signature: string,
+): boolean {
+  try {
+    const sig = getBytes(signature)
+    const point = getBytes(concat(['0x04', pub.qx, pub.qy]))
+    return p256.verify(sig, digest, point)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Deterministic, software-held P-256 signer. PoC-only: the private key is
  * derived as HMAC-SHA256(seed, userId) so a given (seed, userId) always yields
  * the same passkey — keeping counterfactual addresses and fixtures byte-stable
@@ -82,6 +118,8 @@ export function signP256Digest(privateKey: Uint8Array, digest: Uint8Array): stri
  * anything beyond local PoC.
  */
 export class DeterministicPasskeySigner implements PasskeySigner {
+  readonly scheme: PasskeySignatureScheme = 'p256'
+
   private cached: Uint8Array | null = null
 
   constructor(
