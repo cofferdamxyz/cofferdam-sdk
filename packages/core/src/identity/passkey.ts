@@ -1,4 +1,4 @@
-// P-256 (secp256r1) passkey signing for the native ZKSync Era Account
+// P-256 (secp256r1) passkey signing for the Base ERC-4337 Account
 // Abstraction stack.
 //
 // The on-chain `PasskeyAuthority` module (contracts/v2/auth/authorities/

@@ -20,7 +20,14 @@ export {
   type NativeAccountProviderConfig,
   type NativeTxRequest,
   type AuthorityRecord,
+  type GenesisAuthorityConfig,
 } from './providers/NativeAccountProvider.js'
+export {
+  encodeSessionConfig,
+  signSessionInner,
+  deriveSessionSigner,
+  type SessionSigner,
+} from './identity/sessionKey.js'
 export {
   DeterministicPasskeySigner,
   encodePasskeyConfig,
@@ -108,14 +115,19 @@ export {
 export {
   CofferdamSpotEscrowClient,
   COFFERDAM_SPOT_ESCROW_ABI,
-  OPEN_FUNDING,
   type CofferdamSpotEscrowClientConfig,
-  type PostResult,
   type TxResult,
   type TxOptions,
-  type JobContractState,
-  type JobContractStatus,
+  type EscrowState,
+  type SpotEscrowPolicy,
+  type SpotEscrowState,
 } from './escrow/CofferdamSpotEscrowClient.js'
+
+export {
+  CofferdamEscrowFactoryClient,
+  COFFERDAM_ESCROW_FACTORY_ABI,
+  type CofferdamEscrowFactoryClientConfig,
+} from './escrow/CofferdamEscrowFactoryClient.js'
 
 export type {
   AuthorityDescriptor,

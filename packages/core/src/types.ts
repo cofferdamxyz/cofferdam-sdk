@@ -51,8 +51,9 @@ export interface VerifiedClaims {
 // ── Tiered authority model (rev-7.7) ─────────────────────────────────────────
 // Full spec: cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §2.5 (authority tiers + the
 // one-way upgrade ratchet) and §3.12 (the consumer password→passkey migration).
-// The on-chain `CofferdamAccountValidator` is the real enforcer
-// (contracts/WEB3_CONVERSION.md §3.1); these types model it client-side.
+// The on-chain `CofferdamAccount4337` is the real enforcer
+// (base-contracts/contracts/account/CofferdamAccount4337.sol); these types
+// model it client-side.
 
 /**
  * What kind of authority established / signed a session.
@@ -171,8 +172,9 @@ export interface SignInResponse {
   appPseudonym: string
 
   /**
-   * ZKSync Era smart-account address. Use ONLY for chain-relevant operations.
-   * Do NOT use as your primary user key — use appPseudonym for that.
+   * Base smart-account address (ERC-4337 account or EOA). Use ONLY for
+   * chain-relevant operations. Do NOT use as your primary user key —
+   * use appPseudonym for that.
    */
   accountAddress: string
 
@@ -235,10 +237,10 @@ export interface CofferdamConfig {
 /**
  * Provider abstraction. Concrete implementations:
  * - MockProvider          — α-1 (this file's package)
- * - LocalChainProvider    — α-2 (talks to anvil-zksync via viem)
- * - TestnetProvider       — α-3 (ZKSync Era Sepolia; single-chain post rev-6,
+ * - LocalChainProvider    — α-2 (talks to base-anvil via ethers)
+ * - TestnetProvider       — α-3 (Base Sepolia; single-chain post rev-6,
  *                                Celo Alfajores removed from production path)
- * - ProductionProvider    — β  (mainnet + real Cofferdam mobile app deep-link)
+ * - ProductionProvider    — β  (Base mainnet + real Cofferdam mobile app deep-link)
  */
 export interface CofferdamProvider {
   readonly mode: NetworkMode

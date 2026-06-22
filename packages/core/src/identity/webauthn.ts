@@ -1,4 +1,4 @@
-// WebAuthn passkey signing for the native ZKSync Era Account Abstraction stack.
+// WebAuthn passkey signing for the Base ERC-4337 Account Abstraction stack.
 //
 // This is the REAL-passkey counterpart to `passkey.ts`'s software signer. The
 // on-chain `WebAuthnPasskeyAuthority` (contracts/v2/auth/authorities/

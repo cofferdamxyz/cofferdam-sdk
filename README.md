@@ -6,7 +6,7 @@
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)]()
 [![Maintained by](https://img.shields.io/badge/maintained%20by-OffshoreSync%20LLC-0a66c2.svg)](https://offshoresync.com)
 
-`cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/OffshoreSync/Cofferdam) — a horizontally-scalable, open-source Web3 SDK + companion app for identity, end-to-end-encrypted messaging, verifiable credentials, and on-chain corporate payments, published by OffshoreSync LLC. Maritime is the first vertical pilot; the architecture is sector-neutral (see `@/Users/hoff/OffshoreSync/STRATEGY.md`). The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, ZKSync Era native account abstraction, Cloudflare Containers, or Workers AI.
+`cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/OffshoreSync/Cofferdam) — a horizontally-scalable, open-source Web3 SDK + companion app for identity, end-to-end-encrypted messaging, verifiable credentials, and on-chain corporate payments, published by OffshoreSync LLC. Maritime is the first vertical pilot; the architecture is sector-neutral (see `@/Users/hoff/OffshoreSync/STRATEGY.md`). The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, Base native account abstraction, Cloudflare Containers, or Workers AI.
 
 > "Sign in with Cofferdam" is to maritime-grade identity what "Sign in with Apple" is to email-grade identity. The user owns their keys. The app gets a verified, sybil-resistant, cryptographically-anchored identity. Nobody hands plaintext data to anyone.
 
@@ -34,7 +34,7 @@ This SDK is **open source from day one**, MIT-licensed, framework-agnostic at th
 
 The SDK exposes **five primitives**, each of which delegates the heavy lifting to the Cofferdam mobile app (or, for web, to a Cofferdam-hosted WebAuthn flow + deep link to the mobile app):
 
-1. **Identity** — *"Is this user a verified, sybil-resistant human, and what's their stable identifier?"* Returns a **per-app pseudonym** (`appPseudonym`) — the consumer app's stable user identifier, derived from a Cofferdam-internal nullifier the consumer app never sees (see §5.6 *Privacy invariant*). Also returns a smart-account address on ZKSync Era for chain-relevant operations, a verification status (Self.xyz nullifier-bound or not), and optional selective-disclosure claims (country, age range, OFAC status). **The nullifier itself is never exposed to the consumer app or its server** — two different consumer apps see two different pseudonyms for the same user; a breach of one consumer app cannot be union-correlated with another. **Self verification is value-gated** — the SDK does not require it at sign-in; it triggers Self only when the user touches a feature that genuinely needs it (verified-flavor messaging, contract signing, financial features, verified-context document sharing). See §2.4. The Identity primitive also supports **account linking metadata**: the consumer app supplies its display name + icon + per-user handle, which appears in the user's Cofferdam *Settings → Linked accounts* view.
+1. **Identity** — *"Is this user a verified, sybil-resistant human, and what's their stable identifier?"* Returns a **per-app pseudonym** (`appPseudonym`) — the consumer app's stable user identifier, derived from a Cofferdam-internal nullifier the consumer app never sees (see §5.6 *Privacy invariant*). Also returns a smart-account address on Base for chain-relevant operations, a verification status (Self.xyz nullifier-bound or not), and optional selective-disclosure claims (country, age range, OFAC status). **The nullifier itself is never exposed to the consumer app or its server** — two different consumer apps see two different pseudonyms for the same user; a breach of one consumer app cannot be union-correlated with another. **Self verification is value-gated** — the SDK does not require it at sign-in; it triggers Self only when the user touches a feature that genuinely needs it (verified-flavor messaging, contract signing, financial features, verified-context document sharing). See §2.4. The Identity primitive also supports **account linking metadata**: the consumer app supplies its display name + icon + per-user handle, which appears in the user's Cofferdam *Settings → Linked accounts* view.
 2. **Signing** — *"Have this user sign this on-chain transaction."* Used for escrow contracts, proof-of-presence check-ins, and any custom contract the integrating app defines.
 3. **Documents (Vault)** — *"Store, parse, list, view, and share encrypted documents for this user, scoped to my app."* The Vault is **generic, per-scope, and parser-configurable**: each consumer app registers the document categories it supports and the Gemini Vision schema to apply per category (or *no parser at all* for blob-only storage). OffshoreSync registers `maritime-certificate` with the STCW schema and recreates its existing Certificate Wallet UI on top of the SDK; a P&I-club app registers `claim-form` with a claims schema; a notary app registers raw documents with `parser: 'none'` and nothing is parsed. **Same dual-UI win as messaging** (see primitive #4): consumer apps either build their own document UI on top of the SDK *or* defer entirely to the Cofferdam app's Vault UI via `documents.openInCofferdam(docId)` — both work, pick per-surface. Plaintext never reaches the integrating app's server unless the user explicitly shares it.
 4. **Messaging** — *"Establish an E2EE conversation between two of my app's users."* The integrating app supplies the conversation metadata (e.g. match-room ID) and the social context ("these two are mutual friends in my app"); Cofferdam handles the handshake + cryptography. **The SDK can also bridge a handshake on behalf of the consumer app** — if A and B are friends on OffshoreSync but haven't yet handshaken on Cofferdam, A tapping `[Message]` triggers a one-tap mutual handshake using the OffshoreSync friendship as social attestation. Same primitive scales to **group invitations**: pick N users in OffshoreSync, every linked-Cofferdam participant receives a one-tap accept push.
@@ -58,7 +58,7 @@ Consumer app calls cofferdam.signIn({ scope, ...policy })
        ▼
 2. Cofferdam app checks:
    - Does the user have a passkey? If not, create one (Secure Enclave / StrongBox).
-   - Does the user have a Cofferdam account (smart account on ZKSync Era)?
+   - Does the user have a Cofferdam account (smart account on Base)?
        - If not, RUN account-deploy flow.
        - Account-deploy flow checks the consumer app's policy:
            * policy.enforceSelfBeforeAccount = false (DEFAULT, e.g. OffshoreSync):
@@ -67,7 +67,7 @@ Consumer app calls cofferdam.signIn({ scope, ...policy })
            * policy.enforceSelfBeforeAccount = true (STRICT, e.g. a banking app):
              - Run Self.xyz NFC passport flow first.
              - Wait for v2 NullifierRegistry.bindNullifier confirmation
-               on ZKSync Era (single-chain, ~seconds; no LayerZero hop).
+               on Base (single-chain, ~seconds; no LayerZero hop).
              - ONLY THEN deploy the smart account.
        │
        ▼
@@ -83,7 +83,7 @@ Consumer app calls cofferdam.signIn({ scope, ...policy })
      // entirely on the user's device; the nullifier itself never reaches you.
      appPseudonym:         "cd_pseudo_4f8a3b…",
 
-     // ZKSync Era smart-account address. Use this ONLY for chain-relevant
+     // Base smart-account address. Use this ONLY for chain-relevant
      // operations (receiving payment, verifying on-chain events). Do NOT use
      // it as your primary user key — use appPseudonym for that.
      accountAddress:       "0xab12…",
@@ -116,7 +116,7 @@ Consumer app calls cofferdam.signIn({ scope, ...policy })
 
 This is the **single most important policy decision** in the SDK and deserves its own dedicated explanation.
 
-> The ZKSync Era smart account is the **master key**. Every other key in Cofferdam derives from it. We are deliberate about when it gets deployed.
+> The Base smart account is the **master key**. Every other key in Cofferdam derives from it. We are deliberate about when it gets deployed.
 
 **`enforceSelfBeforeAccount: false`** (DEFAULT, OffshoreSync's policy):
 - The smart account is deployed **immediately after passkey creation**.
@@ -125,10 +125,10 @@ This is the **single most important policy decision** in the SDK and deserves it
 - This is the right policy for **social, content, and marketplace apps** where blocking signup on a 5-minute passport scan kills conversion.
 
 **`enforceSelfBeforeAccount: true`** (STRICT):
-- The smart account is **NOT deployed** until the Self.xyz passport flow has completed AND the v2 `NullifierRegistry.bindNullifier` tx has confirmed on ZKSync Era (single-chain, paymaster-sponsored; no LayerZero hop in production post-rev-6).
+- The smart account is **NOT deployed** until the Self.xyz passport flow has completed AND the v2 `NullifierRegistry.bindNullifier` tx has confirmed on Base (single-chain, paymaster-sponsored; no LayerZero hop in production post-rev-6).
 - The user cannot sign in to the consumer app at all without a completed Self verification.
 - This is the right policy for **regulated apps** — banking, large-value financial flows, government-adjacent services — where the consumer cannot afford an unverified-account state.
-- Trade-off: the onboarding flow becomes ~1–2 minutes (NFC + Cloudflare Container Groth16 prove + single ZKSync bind tx), and the user needs an NFC-equipped phone with a valid biometric passport.
+- Trade-off: the onboarding flow becomes ~1–2 minutes (NFC + Cloudflare Container Groth16 prove + single Base bind tx), and the user needs an NFC-equipped phone with a valid biometric passport.
 
 The SDK exposes both options as a simple boolean flag on the `signIn` call. **OffshoreSync uses `false`.** A maritime banking app would use `true`.
 
@@ -169,7 +169,7 @@ For clarity — and so consumer apps can confidently expose these surfaces to un
 
 #### Inline Self prompt UX
 
-When a callsite trigger fires for an unverified user, the SDK does NOT throw an error. It deep-links the user into the Cofferdam app's Self verification flow, runs the NFC passport scan, ships the encrypted passport bytes to the `cofferdam-prover` Cloudflare Container, waits for the v2 `NullifierRegistry.bindNullifier` tx to confirm on ZKSync Era (single-chain, ~seconds), and *then* completes the original SDK call. From the consumer app's perspective the call simply takes longer the first time; from the user's perspective they get a single, contextual *"Verify to continue with [feature]"* prompt explaining why the verification is needed.
+When a callsite trigger fires for an unverified user, the SDK does NOT throw an error. It deep-links the user into the Cofferdam app's Self verification flow, runs the NFC passport scan, ships the encrypted passport bytes to the `cofferdam-prover` Cloudflare Container, waits for the v2 `NullifierRegistry.bindNullifier` tx to confirm on Base (single-chain, ~seconds), and *then* completes the original SDK call. From the consumer app's perspective the call simply takes longer the first time; from the user's perspective they get a single, contextual *"Verify to continue with [feature]"* prompt explaining why the verification is needed.
 
 ```ts
 // Consumer-app code is identical whether the user is verified or not:
@@ -179,7 +179,7 @@ await cofferdam.payments.openOffRamp({ amount: 100, currency: 'BRL' })
 //   1. Checks: is the user verified?
 //   2. If yes → opens the off-ramp picker (country-routed via Self claims).
 //   3. If no  → opens the Cofferdam app, runs Self NFC flow, waits for the
-//              v2 NullifierRegistry bind tx to confirm on ZKSync Era, THEN
+//              v2 NullifierRegistry bind tx to confirm on Base, THEN
 //              opens the off-ramp picker.
 //
 // The consumer app sees a single Promise resolution either way.
@@ -332,14 +332,14 @@ The consumer app should call `linkedAccount.set()` once per user (post-sign-in),
 ### 4.3 Signing — on-chain transactions
 
 ```ts
-// Ask the user to sign an arbitrary ZKSync Era transaction.
+// Ask the user to sign an arbitrary Base transaction.
 // Cofferdam handles paymaster sponsorship if configured.
 const txHash = await cofferdam.signAndSendTx({
   to:          '0x…',
   data:        '0x…',
   value:       0n,
   description: 'Accept job contract #1234 with Acme Drilling',
-  chain:       'zksync-era',     // 'zksync-era' is the production rail; legacy 'celo'
+  chain:       'base',           // 'base' is the production rail; legacy 'celo'
                                   // remains routable for read-only / archival flows.
   sponsorship: 'auto',           // 'auto' | 'self' | 'none'
 })
@@ -639,7 +639,7 @@ const result = await cofferdam.payments.send({
   to:          '0x…',            // or toHandle: '@hoff'
   amount:      '1500.00',
   token:       'USDC',
-  chain:       'zksync-era',     // user may switch to 'celo' if they prefer
+  chain:       'base',           // user may switch to 'celo' if they prefer
   memo:        'Contract #1234 settlement bonus',
 })
 // → { txHash, chain } | { error: 'cancelled' | 'insufficient_balance' | ... }
@@ -671,15 +671,15 @@ const proof = await cofferdam.proofs.request({
 
 ### 4.7a On-chain escrow (α-2)
 
-The SDK ships a typed client for the `CofferdamSpotEscrow` v1/zksync contract. It handles both posting paths, the full lifecycle, contract-id extraction from receipts, and the status enum. Consumer apps integrating the on-chain employment-escrow flow import it instead of re-deriving the ABI.
+The SDK ships a typed client for the `CofferdamSpotEscrow` Base contract. It handles both posting paths, the full lifecycle, contract-id extraction from receipts, and the status enum. Consumer apps integrating the on-chain employment-escrow flow import it instead of re-deriving the ABI.
 
 ```ts
 import { CofferdamSpotEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
-import { Wallet as ZkWallet } from 'zksync-ethers'
+import { Wallet } from 'ethers'
 
 const escrow = new CofferdamSpotEscrowClient({
-  address: '0x2F22FE817dAA3Bff101f888C94F3ce0814880535', // Sepolia α-2 deploy
-  signer:  recruiterWallet,                              // any Cofferdam-bound ZkWallet
+  address: '0x…',                                       // Base Sepolia deploy
+  signer:  recruiterWallet,                              // any Cofferdam-bound ethers Wallet
 })
 ```
 
@@ -1144,7 +1144,7 @@ The reference integration is the canonical answer to *"how do I use this SDK?"* 
 | Verified-flavor conversations opened by your app's users | Social-flavor conversations |
 | Documents your app parses through the Vault's Workers AI pipeline | Documents your app uploads with `parser: 'none'` (blob-only) |
 | Escrows your app creates (take rate on notional) | Escrow *viewing* / status reads |
-| ~~LayerZero attestation mirrors triggered by your app~~  (legacy line; v2 identity binding is single-chain on ZKSync Era and not separately metered) | Self verification gas (paymaster-borne in Plan A; user-borne in Plan B — never integrator-borne) |
+| ~~LayerZero attestation mirrors triggered by your app~~  (legacy line; v2 identity binding is single-chain on Base and not separately metered) | Self verification gas (paymaster-borne in Plan A; user-borne in Plan B — never integrator-borne) |
 | Per-call overages above the Tier 2 included quotas | API calls that are read-only / metadata-only |
 
 ### 7.2 Tiers (consumer-app pricing)
@@ -1182,7 +1182,7 @@ This is the canonical mapping from SDK calls to billable units. The SDK reports 
 | `escrow.release(...)` | ❌ | — | Take rate already collected at create. |
 | `payments.send(...)` (P2P, Cofferdam-to-Cofferdam) | ❌ | — | Subsidized. Gas only. |
 | `payments.offRamp(...)` | ❌ | — | You're not billed; **Cofferdam takes 0.3–0.5% directly from the FX spread**, transparent to the user. Tier 3 can negotiate revenue share. |
-| ~~`attestation.mirrorToZksync(...)` (LayerZero)~~ | n/a | $0 | **Retired in rev-6.** v2 identity binding lands directly on ZKSync Era — there's no cross-chain mirror to meter. |
+| ~~`attestation.mirrorToZksync(...)` (LayerZero)~~ | n/a | $0 | **Retired in rev-6.** v2 identity binding lands directly on Base — there's no cross-chain mirror to meter. |
 | `identity.linkedAccount.update(...)` | ❌ | — | Free. |
 | All `*.list()`, `*.status()`, `*.get(...)` read APIs | ❌ | — | Free. |
 
@@ -1274,6 +1274,17 @@ This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C v
 
 Then `yarn install` / `npm install` as usual. For a runnable starting template see [`examples/capacitor-minimal/`](./examples/capacitor-minimal/) — a Vite + React + Capacitor 7 app that mounts `<CofferdamProvider>` + the drop-in `<SignInWithCofferdamButton>` in <80 lines of TSX.
 
+The same example ships several `VITE_COFFERDAM_NETWORK` demo modes (selected via `yarn dev:<mode>`) that exercise the real Base ERC-4337 stack via `NativeAccountProvider` (see §8.1):
+
+| `yarn` script | Mode | What it shows |
+|---|---|---|
+| `dev` | `mock` | In-process `MockProvider` — no chain, no app. |
+| `dev:local-chain` / `dev:sepolia-testnet` | `local-chain` / `sepolia-testnet` | `LocalChainProvider` escrow lifecycle (anvil / Base Sepolia). |
+| `dev:native-aa` / `dev:native-aa-testnet` | `native-aa` | Passkey-governed `CofferdamAccount4337`: sign-in derives a P-256 passkey + counterfactual address, CREATE2 deploy, then a **gasless** UserOp sponsored by `CofferdamPaymaster`. |
+| `dev:web2-auth` / `dev:web2-auth-testnet` | `web2-auth` | Web2 login → on-chain account via the `SessionKeyAuthority` bridge: log in (password / OAuth / SSO) → counterfactual address → deploy → **upgrade to a passkey** (one-way ratchet locks out the leakable web2 credential). |
+
+The `-testnet` variants run against Base Sepolia (chainId 84532) and read the `VITE_NATIVE_TESTNET_*` addresses from `.env.local`.
+
 **Branch / ref strategy:**
 
 | Source branch | Release branches | When to pin here |
@@ -1313,6 +1324,44 @@ Platform support matrix:
 | **Capacitor (the main OffshoreSync app)** | ✅ via `@cofferdam/sdk` + Capacitor URL scheme | Deep-link to Cofferdam mobile app. |
 | **Web (React)** | ✅ via `@cofferdam/sdk-web` + QR handoff | Desktop web → mobile Cofferdam via QR + return-deep-link. |
 | **Node.js (server-side)** | ✅ via `@cofferdam/sdk/server` | Attestation verification + decryption-key unwrapping. |
+
+### 8.1 Base native account abstraction (`NativeAccountProvider`)
+
+For apps that bridge their own backend auth onto Base rather than deep-linking to the Cofferdam mobile app, the core package exports `NativeAccountProvider` (`@cofferdam/sdk/native`) — a direct ERC-4337 client for the `base-contracts` stack (`CofferdamAccount4337`, `CofferdamAccountFactory4337`, `CofferdamPaymaster`, `PasskeyAuthority` / `SessionKeyAuthority`) against **EntryPoint v0.7** (`0x0000000071727De22E5E9d8BAf0edAc6f37da032`).
+
+```ts
+import { NativeAccountProvider } from '@cofferdam/sdk/native'
+import { deriveSessionSigner } from '@cofferdam/sdk'
+
+const provider = new NativeAccountProvider({
+  scope: 'my-app',
+  rpcUrl: 'https://sepolia.base.org',
+  chainId: 84532,
+  contracts: { factory, passkeyModule, paymaster },
+  userId: 'password:alice@acme.com',
+  deployerPrivateKey,            // PoC bundler/deployer; production uses a bundler + CDP paymaster
+  usePaymaster: true,
+  defaultGasLimit: 1_500_000n,   // per-op verification + call; the 20M default exceeds the testnet block limit (AA95)
+  // Web2 bridge: a server-derived session signer becomes the genesis authority
+  genesisAuthority: {
+    kind: 'session', module: sessionModule, tier: 'low_untrusted',
+    sessionSigner: deriveSessionSigner('my-app', 'password:alice@acme.com'),
+    authorityKind: 'password',
+  },
+})
+
+await provider.signIn({})            // derive counterfactual address (no chain write)
+await provider.ensureDeployed()      // CREATE2 deploy via factory
+await provider.sendTransaction({ to, value, data })   // gasless UserOp via paymaster
+await provider.enrollFirstPasskey({ lane: 'in_browser' }) // one-way ratchet → High-tier passkey
+```
+
+Gas-sponsorship notes (PoC paymaster):
+
+- `paymasterAndData` packs `[paymaster, verificationGasLimit, paymasterPostOpGasLimit]`. The post-op limit must be **non-zero** — EntryPoint v0.7 calls `postOp{gas: paymasterPostOpGasLimit}(...)`, so `0` reverts (`PostOpReverted`) and rolls back the whole UserOp. The SDK uses `100_000`.
+- `CofferdamPaymaster` is a dev/test stub; production gas sponsorship uses the CDP (ERC-7677) paymaster, where `paymasterAndData` is populated server-side.
+
+Both paths are exercised end-to-end on Base Sepolia by the `native-aa-testnet` and `web2-auth-testnet` demo modes in `examples/capacitor-minimal` (see the table above).
 
 ---
 
@@ -1393,4 +1442,4 @@ The Cofferdam name and logo are trademarks of OffshoreSync LLC. The SDK code is 
 
 ---
 
-_Last updated: 2026-05-17 — Added §7 Pricing, paymaster, and metering (consumer-app pricing tiers, SDK-callsite billing map, paymaster pool semantics, storage quotas, conversion-preservation contract). API surface is illustrative; final signatures stabilize at v0.1 alongside Cofferdam mobile app's Phase 2 ship._
+_Last updated: 2026-06-22 — Added §8.1 Base native account abstraction (`NativeAccountProvider`): direct ERC-4337 client for the `base-contracts` stack on EntryPoint v0.7, the web2→on-chain session-key bridge with one-way passkey ratchet, paymaster gas-sponsorship notes, and the `native-aa` / `web2-auth` demo modes in `examples/capacitor-minimal` (verified end-to-end on Base Sepolia). Earlier: §7 Pricing, paymaster, and metering. API surface is illustrative; final signatures stabilize at v0.1 alongside Cofferdam mobile app's Phase 2 ship._

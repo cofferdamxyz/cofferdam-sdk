@@ -1,110 +1,100 @@
-// CofferdamSpotEscrowClient — Phase α-2 / α-3.
+// CofferdamSpotEscrowClient — Base single-instance escrow client.
 //
-// Typed, framework-agnostic client for the v1/zksync CofferdamSpotEscrow
-// contract. Wraps a `zksync-ethers` Contract instance with:
+// Typed, framework-agnostic client for the CofferdamSpotEscrow contract
+// on Base. Each escrow is its own contract instance deployed by
+// EscrowFactory.createSpotEscrow(policy). This client wraps one instance
+// with:
 //
-//   - Both posting paths:
-//       • self-funded   — `postContract(termsHash, amountWei)`
-//       • corporate     — `postContractIntent(...)` + `fundContract(...)`
-//   - Full lifecycle  — `awardContract`, `checkIn`, `checkOut`, `settle`,
-//                        `cancel`, `cancelDraft`
-//   - State reads     — `getContract(contractId)` returns a typed snapshot
-//                        with `status` as a string union (not the raw uint8)
-//   - Static helpers  — `CofferdamSpotEscrowClient.hashTerms(...)` canonical
-//                        keccak256 of a string or JSON-serialisable object
+//   - Full lifecycle  — `fund`, `setWitness`, `checkIn`, `checkOut`,
+//                        `cancel`, `refund`, `voidEscrow`
+//   - State reads     — `getState()`, `getPolicy()`, `getUSDC()`
+//   - USDC approval   — `approveUSDC()` helper for the funder
 //
-// Why this exists
-// ───────────────
-// In α-2 every consumer app re-implemented its own ABI fragment + viem/ethers
-// glue to talk to the escrow (see capacitor-minimal's `ESCROW_ABI` block).
-// That's fine for one demo but doesn't scale: the corporate-flow event order
-// (`ContractDrafted` → `ContractFunded` → `ContractPosted`), the
-// "designatedFunder == address(0) means open funding" rule, and the "settle
-// is value-less because escrow pays internally" detail all need to live in
-// one place that consumers can `import` from.
-//
-// What this client is NOT
-// ───────────────────────
-// - Not a passkey / smart-account signer. It expects a `zksync-ethers` Wallet
-//   (or anything signature-compatible). The α-2 demo passes a deterministic
-//   EOA derived from `mockUserId`; β replaces that with a passkey-backed AA
-//   account contract — the client API doesn't change.
-// - Not aware of identity binding. The contract enforces
-//   `identity.isAccountBound(msg.sender)` itself; this client just surfaces
-//   the resulting revert as a typed error. Sign-in via `LocalChainProvider`
-//   handles binding upstream.
-// - Not a dispute / arbiter surface. Disputes are owner-only (the LLC
-//   Treasury Safe in production) and out of scope for the consumer-facing
-//   client. A separate `CofferdamSpotEscrowArbiterClient` may land later.
+// The contract is USDC-based (not ETH). The funder must approve USDC
+// transfer before calling `fund()`. The flow is:
+//   deploy → fund → setWitness? → checkIn(worker) → checkOut()
+//                          ↑ HR         ↑ witness       ↑ witness (auto-release)
 
-import { keccak256, toUtf8Bytes, type Interface, type Log } from 'ethers'
-import { Contract as ZkContract, Wallet as ZkWallet, Provider as ZkProvider } from 'zksync-ethers'
+import {
+  Contract as EthContract,
+  Wallet as EthWallet,
+  JsonRpcProvider as EthProvider,
+  type Interface,
+  type Log,
+  keccak256,
+  toUtf8Bytes,
+} from 'ethers'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Public ABI fragment
 // ────────────────────────────────────────────────────────────────────────────
-//
-// Kept inline rather than imported from the Hardhat artifact JSON so this
-// package doesn't drag a compiled-contract dependency. The fragment is the
-// minimal surface needed for both flows + every lifecycle transition.
 
 export const COFFERDAM_SPOT_ESCROW_ABI = [
-  // ── self-funded path ─────────────────────────────────────────────────
-  'function postContract(bytes32 termsHash) payable returns (uint256)',
-  // ── corporate path ───────────────────────────────────────────────────
-  'function postContractIntent(bytes32 termsHash, uint256 amount, address designatedFunder) returns (uint256)',
-  'function fundContract(uint256 contractId) payable',
-  'function cancelDraft(uint256 contractId)',
-  // ── shared lifecycle ─────────────────────────────────────────────────
-  'function awardContract(uint256 contractId, address workerAccount)',
-  'function checkIn(uint256 contractId)',
-  'function checkOut(uint256 contractId)',
-  'function settle(uint256 contractId)',
-  'function cancel(uint256 contractId)',
+  // ── lifecycle ───────────────────────────────────────────────────────
+  'function awardWorker(address worker) external',
+  'function fund(uint256 amount) external',
+  'function setWitness(address newWitness) external',
+  'function checkIn(address worker) external',
+  'function checkOut() external',
+  'function cancel() external',
+  'function refund() external',
+  'function reclaimNoShow() external',
+  'function claimAfterCheckoutTimeout() external',
+  'function raiseDispute(bytes32 reason) external',
+  'function resolveDispute(uint256 workerAmount) external',
+  'function claimAfterDisputeTimeout() external',
   // ── reads ────────────────────────────────────────────────────────────
-  'function getContract(uint256 contractId) view returns (tuple(address recruiter, address designatedFunder, address funder, address worker, uint256 amount, bytes32 termsHash, uint64 draftedAt, uint64 postedAt, uint64 awardedAt, uint64 checkedInAt, uint64 checkedOutAt, uint8 status))',
-  'function nextContractId() view returns (uint256)',
-  // ── events (decoded by extractContractId + tx receipt helpers) ───────
-  'event ContractDrafted(uint256 indexed contractId, address indexed recruiter, address indexed designatedFunder, uint256 amount, bytes32 termsHash)',
-  'event ContractFunded(uint256 indexed contractId, address indexed funder, uint256 amount)',
-  'event ContractPosted(uint256 indexed contractId, address indexed recruiter, uint256 amount, bytes32 termsHash)',
-  'event ContractAwarded(uint256 indexed contractId, address indexed recruiter, address indexed worker)',
-  'event WorkerCheckedIn(uint256 indexed contractId, address indexed worker, uint64 at)',
-  'event WorkerCheckedOut(uint256 indexed contractId, address indexed worker, uint64 at)',
-  'event ContractSettled(uint256 indexed contractId, address indexed worker, uint256 amount)',
-  'event DraftCancelled(uint256 indexed contractId, address indexed recruiter)',
-  'event ContractCancelled(uint256 indexed contractId, address indexed recruiter, uint256 refund)',
+  'function USDC() view returns (address)',
+  'function policy() view returns (tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow))',
+  'function state() view returns (uint8)',
+  'function fundedAmount() view returns (uint256)',
+  'function createdAt() view returns (uint256)',
+  'function checkedInAt() view returns (uint256)',
+  'function checkedOutAt() view returns (uint256)',
+  'function worker() view returns (address)',
+  'function awardedWorker() view returns (address)',
+  'function disputeReason() view returns (bytes32)',
+  'function disputedAt() view returns (uint256)',
+  'function witnessHistoryCount() view returns (uint256)',
+  'function witnessHistory(uint256 index) view returns (address witness, address assignedBy, uint64 timestamp)',
+  // ── events ───────────────────────────────────────────────────────────
+  'event EscrowStateChanged(uint256 indexed escrowId, uint8 fromState, uint8 toState, address indexed actor, uint64 timestamp, bytes32 proofHash)',
+  'event EscrowFunded(uint256 indexed escrowId, uint256 amount, address indexed funder)',
+  'event EscrowReleased(uint256 indexed escrowId, uint256 amount, address indexed worker)',
+  'event EscrowRefunded(uint256 indexed escrowId, uint256 amount, address indexed funder)',
+  'event WitnessAssigned(address indexed witness, address indexed assignedBy)',
+  'event WitnessReplaced(address indexed oldWitness, address indexed newWitness, address indexed replacedBy)',
+  'event WorkerAwarded(address indexed worker, address indexed awardedBy)',
+  'event KillFeePaid(address indexed worker, uint256 amount, address indexed funder)',
+  'event EscrowDisputed(uint256 indexed escrowId, address indexed disputer, bytes32 reason)',
+  'event DisputeResolved(address indexed worker, uint256 workerAmount, address indexed funder, uint256 funderAmount, address indexed arbiter)',
 ] as const
 
 // ────────────────────────────────────────────────────────────────────────────
-// Status enum mirror
+// EscrowState enum mirror (from IEscrow.sol)
 // ────────────────────────────────────────────────────────────────────────────
-//
-// Mirrors the Solidity Status enum byte-for-byte. `Drafted` is appended at
-// index 8 because it was added after the original 0..7 lifecycle shipped —
-// see CofferdamSpotEscrow.sol §"Job-contract state machine".
 
-export type JobContractStatus =
-  | 'Posted' // 0 — funded, awaiting award
-  | 'Awarded' // 1 — worker assigned
-  | 'CheckedIn' // 2 — worker on-site
-  | 'CheckedOut' // 3 — worker finished, awaiting settle
-  | 'Settled' // 4 — funds paid to worker (terminal)
-  | 'Cancelled' // 5 — terminal
-  | 'Disputed' // 6 — awaiting arbiter
-  | 'Resolved' // 7 — terminal (post-dispute)
-  | 'Drafted' // 8 — corporate flow: intent posted, not yet funded
+export type EscrowState =
+  | 'Created'   // 0
+  | 'Funded'    // 1
+  | 'Active'    // 2
+  | 'Pending'   // 3
+  | 'Released'  // 4
+  | 'Disputed'  // 5
+  | 'Cancelled' // 6
+  | 'Refunded'  // 7
+  | 'Void'      // 8
 
-const STATUS_BY_INDEX: readonly JobContractStatus[] = [
-  'Posted',
-  'Awarded',
-  'CheckedIn',
-  'CheckedOut',
-  'Settled',
-  'Cancelled',
+const STATE_BY_INDEX: readonly EscrowState[] = [
+  'Created',
+  'Funded',
+  'Active',
+  'Pending',
+  'Released',
   'Disputed',
-  'Resolved',
-  'Drafted',
+  'Cancelled',
+  'Refunded',
+  'Void',
 ]
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -114,78 +104,43 @@ const STATUS_BY_INDEX: readonly JobContractStatus[] = [
 export interface CofferdamSpotEscrowClientConfig {
   /** Deployed `CofferdamSpotEscrow` address. */
   address: string
-
-  /**
-   * Wallet that will sign + send state-mutating txs. Must be a
-   * Cofferdam-bound EOA / smart account (the contract enforces this via
-   * `onlyBoundAccount`).
-   */
-  signer: ZkWallet
-
-  /**
-   * Optional read-only provider used for `getContract()` and other view
-   * calls. Defaults to `signer.provider`, which is what you want 99% of
-   * the time. Override if you want reads to go through a faster RPC than
-   * the signer's network.
-   */
-  provider?: ZkProvider
-}
-
-/**
- * Open-funding sentinel for `postContractIntent.designatedFunder`. Passing
- * this means "any Cofferdam-bound account can fund this draft" — useful for
- * solo recruiters who don't yet know which company will pick up the tab.
- */
-export const OPEN_FUNDING: '0x0000000000000000000000000000000000000000' =
-  '0x0000000000000000000000000000000000000000'
-
-export interface PostResult {
-  contractId: bigint
-  txHash: string
+  /** Wallet that will sign + send state-mutating txs. */
+  signer: EthWallet
+  /** Optional read-only provider. Defaults to `signer.provider`. */
+  provider?: EthProvider
 }
 
 export interface TxResult {
   txHash: string
 }
 
-/**
- * Optional callbacks + overrides accepted by every mutating method on the
- * client. Pass an `onSent` handler if you need to render a "tx submitted,
- * waiting for confirmation" state in your UI between submit and `wait()`.
- */
 export interface TxOptions {
-  /**
-   * Invoked the moment the tx is broadcast (post-signature, pre-confirmation).
-   * Receives the tx hash. Useful for progressive UI updates and tail logs.
-   */
   onSent?: (txHash: string) => void
 }
 
-export interface JobContractState {
-  contractId: bigint
-  recruiter: string
-  /**
-   * `address(0)` (== `OPEN_FUNDING`) means "open funding": any bound account
-   * can fund this draft. Otherwise this address is the only one that can.
-   */
-  designatedFunder: string
-  /** `address(0)` until funded. */
+export interface SpotEscrowPolicy {
   funder: string
-  /** `address(0)` until awarded. */
-  worker: string
-  amount: bigint
-  termsHash: string
-  /** Unix seconds. 0 if posted via the self-funded path. */
-  draftedAt: number
-  /** Unix seconds. Set when funded (or at postContract time for self-funded). */
-  postedAt: number
-  /** Unix seconds. 0 until awarded. */
-  awardedAt: number
-  /** Unix seconds. 0 until checked in. */
+  recruiter: string
+  workerNullifier: string
+  checkInTimeout: number
+  checkOutTimeout: number
+  witness: string
+  arbiter: string
+  killFeeBps: number
+  amount: bigint        // agreed pay; fund() must match if non-zero (0 = unspecified)
+  termsHash: string     // bytes32 hash/pointer to off-chain terms (0x0 = none)
+  jobStartTime: number  // unix seconds; check-in window keys off this (0 = at creation)
+  disputeWindow: number // seconds; worker can claim if arbiter is silent (0 = no deadline)
+}
+
+export interface SpotEscrowState {
+  state: EscrowState
+  fundedAmount: bigint
+  createdAt: number
   checkedInAt: number
-  /** Unix seconds. 0 until checked out. */
   checkedOutAt: number
-  status: JobContractStatus
+  worker: string
+  awardedWorker: string
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -193,177 +148,176 @@ export interface JobContractState {
 // ────────────────────────────────────────────────────────────────────────────
 
 export class CofferdamSpotEscrowClient {
-  /** Deployed escrow contract address. */
   readonly address: string
-
-  /** Bound signing wallet (mutating calls go through this). */
-  readonly signer: ZkWallet
-
-  /** Read provider. Defaults to `signer.provider`. */
-  readonly provider: ZkProvider
-
-  /** Pre-built `zksync-ethers` Contract bound to the signer. */
-  private readonly contract: ZkContract
-
-  /** Same address as `contract` but bound to `provider` for view calls. */
-  private readonly readonly: ZkContract
-
-  /** Cached `ethers.Interface` for event decoding. */
+  readonly signer: EthWallet
+  readonly provider: EthProvider
+  private readonly contract: EthContract
+  private readonly readonlyContract: EthContract
   private readonly iface: Interface
 
   constructor(config: CofferdamSpotEscrowClientConfig) {
     this.address = config.address
     this.signer = config.signer
-    const signerProvider = (config.signer.provider ?? null) as ZkProvider | null
+    const signerProvider = (config.signer.provider ?? null) as EthProvider | null
     if (!config.provider && !signerProvider) {
       throw new Error(
         '[cofferdam-sdk] CofferdamSpotEscrowClient: signer has no provider and no fallback provider was supplied.',
       )
     }
-    this.provider = config.provider ?? (signerProvider as ZkProvider)
-    this.contract = new ZkContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], config.signer)
-    this.readonly = new ZkContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], this.provider)
+    this.provider = config.provider ?? (signerProvider as EthProvider)
+    this.contract = new EthContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], config.signer)
+    this.readonlyContract = new EthContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], this.provider)
     this.iface = this.contract.interface
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Self-funded path
+  // Lifecycle
   // ──────────────────────────────────────────────────────────────────────
 
   /**
-   * Self-funded post: recruiter both posts the job and locks the amount
-   * in a single tx. Caller (signer) must be a Cofferdam-bound recruiter.
-   *
-   * @param termsHash  keccak256 of the canonical off-chain terms blob.
-   *                   Build via `CofferdamSpotEscrowClient.hashTerms(...)`.
-   * @param amountWei  Native ETH amount to lock (in wei).
-   * @returns `{ contractId, txHash }` once the tx mines.
+   * Recruiter awards a worker after candidate review. Must be called
+   * AFTER `fund()` and before check-in. Escrow must be in `Funded` state.
    */
-  async postContract(
-    termsHash: string,
-    amountWei: bigint,
-    opts: TxOptions = {},
-  ): Promise<PostResult> {
-    const sent = await this.contract.postContract(termsHash, { value: amountWei })
-    opts.onSent?.(sent.hash)
-    const receipt = await sent.wait()
-    const contractId = this.#extractContractId(receipt.logs, 'ContractPosted')
-    if (contractId == null) {
-      throw new Error(
-        '[cofferdam-sdk] postContract: ContractPosted event not found in receipt logs',
-      )
-    }
-    return { contractId, txHash: sent.hash }
-  }
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Corporate path
-  // ──────────────────────────────────────────────────────────────────────
-
-  /**
-   * Corporate-flow draft: recruiter (HR) posts an intent without locking
-   * funds. A Finance / Treasury account must follow up with `fundContract`
-   * to actually lock the money.
-   *
-   * @param termsHash         keccak256 of canonical terms.
-   * @param amountWei         Native ETH to be locked at funding time.
-   * @param designatedFunder  Address that's allowed to fund. Pass
-   *                          `OPEN_FUNDING` (= `address(0)`) to let any
-   *                          Cofferdam-bound account fund.
-   */
-  async postContractIntent(
-    termsHash: string,
-    amountWei: bigint,
-    designatedFunder: string,
-    opts: TxOptions = {},
-  ): Promise<PostResult> {
-    const sent = await this.contract.postContractIntent(termsHash, amountWei, designatedFunder)
-    opts.onSent?.(sent.hash)
-    const receipt = await sent.wait()
-    const contractId = this.#extractContractId(receipt.logs, 'ContractDrafted')
-    if (contractId == null) {
-      throw new Error(
-        '[cofferdam-sdk] postContractIntent: ContractDrafted event not found in receipt logs',
-      )
-    }
-    return { contractId, txHash: sent.hash }
-  }
-
-  /**
-   * Fund a drafted contract. Caller must be the `designatedFunder` (or
-   * anyone, for an open-funding draft). The value sent must match the
-   * draft's committed `amount` exactly — over/under reverts on-chain.
-   */
-  async fundContract(
-    contractId: bigint,
-    amountWei: bigint,
-    opts: TxOptions = {},
-  ): Promise<TxResult> {
-    const sent = await this.contract.fundContract(contractId, { value: amountWei })
-    opts.onSent?.(sent.hash)
-    await sent.wait()
-    return { txHash: sent.hash }
-  }
-
-  /** Recruiter cancels their own draft before any funder has paid. */
-  async cancelDraft(contractId: bigint, opts: TxOptions = {}): Promise<TxResult> {
-    const sent = await this.contract.cancelDraft(contractId)
-    opts.onSent?.(sent.hash)
-    await sent.wait()
-    return { txHash: sent.hash }
-  }
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Shared lifecycle
-  // ──────────────────────────────────────────────────────────────────────
-
-  /** Recruiter awards a posted contract to a Cofferdam-bound worker. */
-  async awardContract(
-    contractId: bigint,
-    workerAccount: string,
-    opts: TxOptions = {},
-  ): Promise<TxResult> {
-    const sent = await this.contract.awardContract(contractId, workerAccount)
-    opts.onSent?.(sent.hash)
-    await sent.wait()
-    return { txHash: sent.hash }
-  }
-
-  /** Worker check-in (proof of arrival). */
-  async checkIn(contractId: bigint, opts: TxOptions = {}): Promise<TxResult> {
-    const sent = await this.contract.checkIn(contractId)
-    opts.onSent?.(sent.hash)
-    await sent.wait()
-    return { txHash: sent.hash }
-  }
-
-  /** Worker check-out (proof of completion). */
-  async checkOut(contractId: bigint, opts: TxOptions = {}): Promise<TxResult> {
-    const sent = await this.contract.checkOut(contractId)
+  async awardWorker(worker: string, opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.awardWorker(worker)
     opts.onSent?.(sent.hash)
     await sent.wait()
     return { txHash: sent.hash }
   }
 
   /**
-   * Release escrowed funds to the worker. Public-on-purpose: the worker,
-   * the recruiter, the funder, a paymaster, or a Cofferdam keeper bot can
-   * call this once the contract is in `CheckedOut`. The tx itself carries
-   * no value — the escrow pays out from its locked balance.
+   * Funder deposits USDC into the escrow. Caller must be the policy funder
+   * and must have approved USDC for the escrow contract first (see
+   * `approveUSDC`). Escrow must be in `Created` state. The worker is awarded
+   * right after funding (see `awardWorker`).
    */
-  async settle(contractId: bigint, opts: TxOptions = {}): Promise<TxResult> {
-    const sent = await this.contract.settle(contractId)
+  async fund(amount: bigint, opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.fund(amount)
     opts.onSent?.(sent.hash)
     await sent.wait()
     return { txHash: sent.hash }
   }
 
   /**
-   * Recruiter cancels a posted-but-not-yet-awarded contract. Refunds the
-   * locked amount to whoever actually fronted it (`c.funder`).
+   * Approve USDC transfer for the escrow contract. Must be called by the
+   * funder before `fund()`. Uses the USDC address from the contract.
    */
-  async cancel(contractId: bigint, opts: TxOptions = {}): Promise<TxResult> {
-    const sent = await this.contract.cancel(contractId)
+  async approveUSDC(amount: bigint, opts: TxOptions = {}): Promise<TxResult> {
+    const usdcAddr = await this.getUSDC()
+    const erc20Abi = ['function approve(address spender, uint256 amount) returns (bool)']
+    const usdc = new EthContract(usdcAddr, erc20Abi, this.signer)
+    const sent = await usdc.approve(this.address, amount)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Witness check-in. Only the assigned witness can call this.
+   * Escrow must be in `Funded` state and within `checkInTimeout`.
+   */
+  async checkIn(worker: string, opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.checkIn(worker)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Witness check-out. Only the assigned witness can call this.
+   * Auto-releases USDC to the worker. Escrow in `Active`.
+   */
+  async checkOut(opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.checkOut()
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Recruiter assigns or replaces the witness. Can be called in
+   * Funded or Active state (supervisor rotation).
+   */
+  async setWitness(newWitness: string, opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.setWitness(newWitness)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /** Funder cancels before funding. Escrow in `Created`. */
+  async cancel(opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.cancel()
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Funder cancels a funded escrow before the worker checks in (within the
+   * check-in window). The awarded worker is paid a kill fee (killFeeBps);
+   * the remainder returns to the funder. Escrow in `Funded`.
+   */
+  async refund(opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.refund()
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Funder reclaims the FULL amount when the worker never checked in by the
+   * deadline (no-show). No kill fee. Escrow in `Funded`, after checkInTimeout.
+   */
+  async reclaimNoShow(opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.reclaimNoShow()
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Worker claims funds when the company-appointed witness failed to check
+   * them out within `checkOutTimeout`. Permissionless — funds go to the
+   * predetermined worker. Escrow in `Active`, after checkOutTimeout.
+   */
+  async claimAfterCheckoutTimeout(opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.claimAfterCheckoutTimeout()
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Either party (funder, awarded worker, or witness) escalates to the
+   * neutral arbiter. `reason` is a bytes32 hash. Escrow in `Funded`/`Active`.
+   */
+  async raiseDispute(reason: string, opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.raiseDispute(reason)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * Neutral arbiter resolves a dispute by splitting the funded amount:
+   * `workerAmount` to the worker, remainder to the funder. Escrow in
+   * `Disputed`. Caller must be the policy arbiter.
+   */
+  async resolveDispute(workerAmount: bigint, opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.resolveDispute(workerAmount)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /**
+   * If the arbiter never resolves a dispute within disputeWindow, the worker
+   * claims the full amount. Permissionless — funds can only go to the
+   * predetermined worker. Escrow in `Disputed`.
+   */
+  async claimAfterDisputeTimeout(opts: TxOptions = {}): Promise<TxResult> {
+    const sent = await this.contract.claimAfterDisputeTimeout()
     opts.onSent?.(sent.hash)
     await sent.wait()
     return { txHash: sent.hash }
@@ -373,74 +327,63 @@ export class CofferdamSpotEscrowClient {
   // Reads
   // ──────────────────────────────────────────────────────────────────────
 
-  /** Read a single contract's full state. */
-  async getContract(contractId: bigint): Promise<JobContractState> {
-    const raw = await this.readonly.getContract(contractId)
-    const statusIdx = Number(raw.status)
-    const status = STATUS_BY_INDEX[statusIdx]
-    if (!status) {
-      throw new Error(`[cofferdam-sdk] getContract: unknown status index ${statusIdx}`)
-    }
+  /** USDC token address used by this escrow. */
+  async getUSDC(): Promise<string> {
+    return (await this.readonlyContract.USDC()) as string
+  }
+
+  /** Escrow policy (funder, recruiter, workerNullifier, timeouts, witness). */
+  async getPolicy(): Promise<SpotEscrowPolicy> {
+    const raw = await this.readonlyContract.policy()
     return {
-      contractId,
-      recruiter: raw.recruiter,
-      designatedFunder: raw.designatedFunder,
       funder: raw.funder,
-      worker: raw.worker,
-      amount: raw.amount as bigint,
+      recruiter: raw.recruiter,
+      workerNullifier: raw.workerNullifier,
+      checkInTimeout: Number(raw.checkInTimeout),
+      checkOutTimeout: Number(raw.checkOutTimeout),
+      witness: raw.witness,
+      arbiter: raw.arbiter,
+      killFeeBps: Number(raw.killFeeBps),
+      amount: BigInt(raw.amount),
       termsHash: raw.termsHash,
-      draftedAt: Number(raw.draftedAt),
-      postedAt: Number(raw.postedAt),
-      awardedAt: Number(raw.awardedAt),
-      checkedInAt: Number(raw.checkedInAt),
-      checkedOutAt: Number(raw.checkedOutAt),
-      status,
+      jobStartTime: Number(raw.jobStartTime),
+      disputeWindow: Number(raw.disputeWindow),
     }
   }
 
-  /** Next contract id that will be assigned. Useful for indexers. */
-  async nextContractId(): Promise<bigint> {
-    return (await this.readonly.nextContractId()) as bigint
+  /** Current escrow state + key fields. */
+  async getState(): Promise<SpotEscrowState> {
+    const [stateRaw, fundedAmount, createdAt, checkedInAt, checkedOutAt, worker, awardedWorker] = await Promise.all([
+      this.readonlyContract.state(),
+      this.readonlyContract.fundedAmount(),
+      this.readonlyContract.createdAt(),
+      this.readonlyContract.checkedInAt(),
+      this.readonlyContract.checkedOutAt(),
+      this.readonlyContract.worker(),
+      this.readonlyContract.awardedWorker(),
+    ])
+    const stateIdx = Number(stateRaw)
+    const state = STATE_BY_INDEX[stateIdx]
+    if (!state) {
+      throw new Error(`[cofferdam-sdk] getState: unknown state index ${stateIdx}`)
+    }
+    return {
+      state,
+      fundedAmount: fundedAmount as bigint,
+      createdAt: Number(createdAt),
+      checkedInAt: Number(checkedInAt),
+      checkedOutAt: Number(checkedOutAt),
+      worker,
+      awardedWorker,
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────
   // Static helpers
   // ──────────────────────────────────────────────────────────────────────
 
-  /**
-   * Canonical keccak256 of an off-chain terms blob. Accepts:
-   *   - a string  → hashed verbatim as UTF-8 bytes
-   *   - an object → `JSON.stringify` first, then hashed
-   *
-   * In production, prefer producing the canonical JSON yourself (sorted
-   * keys, stable serialisation) and passing a string — this helper exists
-   * for demos and tests where the convenience matters more than strict
-   * canonicalisation.
-   */
   static hashTerms(terms: string | Record<string, unknown>): string {
     const text = typeof terms === 'string' ? terms : JSON.stringify(terms)
     return keccak256(toUtf8Bytes(text))
-  }
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Internals
-  // ──────────────────────────────────────────────────────────────────────
-
-  #extractContractId(
-    logs: ReadonlyArray<Log>,
-    eventName: 'ContractPosted' | 'ContractDrafted',
-  ): bigint | null {
-    const ev = this.iface.getEvent(eventName)
-    if (!ev) return null
-    const topic = ev.topicHash
-    const target = this.address.toLowerCase()
-    for (const log of logs) {
-      if (log.topics[0] !== topic) continue
-      if (log.address.toLowerCase() !== target) continue
-      const parsed = this.iface.parseLog({ topics: [...log.topics], data: log.data })
-      if (!parsed) continue
-      return parsed.args.contractId as bigint
-    }
-    return null
   }
 }

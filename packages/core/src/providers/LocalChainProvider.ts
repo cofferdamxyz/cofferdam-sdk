@@ -1,7 +1,7 @@
-// LocalChainProvider — Phase α-2.
+// LocalChainProvider — Phase α-2 (Base).
 //
-// Talks to a local anvil-zksync node (or any ZKSync Era-shaped JSON-RPC
-// endpoint) and exercises the *real* on-chain identity-binding + account
+// Talks to a local base-anvil node (or any Base-shaped JSON-RPC endpoint,
+// including Base Sepolia) and exercises the on-chain identity + account
 // creation flow that the rest of the system will use in production.
 //
 // What `signIn()` does end-to-end:
@@ -13,33 +13,30 @@
 //   2. (Optional) Pre-fund the derived address from `adminPrivateKey` so it
 //      can post / award / dispute on-chain. PoC convenience only.
 //
-//   3. (Optional) Compute a deterministic nullifier from `mockUserId` and
-//      call `CofferdamReceiver.bindNullifier(account, nullifier)` from
-//      the admin key — this simulates the production v2 path. The admin
-//      key NEVER exists in the client in production; production binding
-//      goes through the cofferdam-prover Cloudflare Container (produces
-//      Groth16 proof) + cofferdam-attester Worker (signs the bind message
-//      against `v2/self/SelfAttesterRegistry`-registered key) + the user's
-//      AA tx submitting to `v2/self/NullifierRegistry.verifyAndBind`. Full
-//      flow in cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3. Legacy α-2 / α-3
-//      LayerZero ingress (`CofferdamReceiver._lzReceive`) remains
-//      deployed on-chain but is not the production path post-rev-6.
+//   3. Check `NullifierRegistry.isAccountBound(account)` to surface whether
+//      the user has been identity-bound on-chain. Actual binding is NOT
+//      performed by this provider — the production path requires a Groth16
+//      proof from the cofferdam-prover Container + an attester signature
+//      from the cofferdam-attester Worker, submitted via an ERC-4337
+//      UserOp to `NullifierRegistry.verifyAndBind`. Full flow in
+//      cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3.
 //
 //   4. Derive `appPseudonym = HMAC(scopeSalt, accountAddress)` and return a
 //      SignInResponse with the on-chain address.
 //
 // What this provider is NOT:
 //   - It is NOT a smart-account / passkey flow. α-2 uses EOAs because the
-//     passkey + ERC-4337-ish account abstraction work lands in β. The
+//     passkey + ERC-4337 account abstraction work lands in β. The
 //     `accountAddress` returned here is the EOA address; in β it becomes a
-//     deployed smart-account contract address.
+//     deployed ERC-4337 smart-account contract address.
 //   - It does NOT proxy through the (not-yet-existing) Cofferdam mobile app.
 //     That's a different transport added in α-3 / β.
+//   - It does NOT bind the user's identity on-chain. Binding requires the
+//     full prover + attester pipeline (see IDENTITY_LAYER_DESIGN.md §3).
 //
 // Selecting via `new Cofferdam({ network: 'local', provider: new LocalChainProvider({...}) })`.
 
-import type { TransactionReceipt as EthersReceipt } from 'ethers'
-import { Provider as ZkProvider, Wallet as ZkWallet, Contract as ZkContract } from 'zksync-ethers'
+import { JsonRpcProvider, Wallet, Contract as EthContract } from 'ethers'
 
 import { derivePseudonym, deriveScopeKey } from '../identity/pseudonym.js'
 import { SignInRejected } from './MockProvider.js'
@@ -61,10 +58,9 @@ export { SignInRejected } from './MockProvider.js'
  * Keeping it inline (rather than importing the full Hardhat artifact JSON)
  * avoids dragging contract build outputs into the SDK package.
  */
-const RECEIVER_ABI = [
-  'function bindNullifier(address account, bytes32 nullifier)',
-  'function accountToNullifier(address) view returns (bytes32)',
-  'function isAccountBound(address) view returns (bool)',
+const NULLIFIER_REGISTRY_ABI = [
+  'function isAccountBound(address account) view returns (bool)',
+  'function isNullifierBound(uint256 nullifier) view returns (bool)',
 ] as const
 
 export interface LocalChainProviderConfig {
@@ -78,16 +74,16 @@ export interface LocalChainProviderConfig {
    */
   scopeSalt?: string
 
-  /** RPC URL of the ZKSync Era-shaped node. Local default: 'http://127.0.0.1:8011'. */
+  /** RPC URL of the Base node. Local default: 'http://127.0.0.1:8545' (base-anvil). */
   rpcUrl: string
 
-  /** Chain id. anvil-zksync default = 260; ZKSync Era Sepolia = 300. */
+  /** Chain id. base-anvil default = 31337; Base Sepolia = 84532; Base mainnet = 8453. */
   chainId: number
 
-  /** Deployed v1/zksync contract addresses. */
+  /** Deployed Base contract addresses. */
   contracts: {
-    /** `CofferdamReceiver` address — required for identity binding. */
-    receiver: string
+    /** `NullifierRegistry` address — used for identity binding checks. */
+    nullifierRegistry: string
     /** `CofferdamSpotEscrow` — currently informational; reserved for future
      *  flows (e.g. provider returning a pre-funded escrow handle). */
     escrow?: string
@@ -100,12 +96,14 @@ export interface LocalChainProviderConfig {
   mockUserId?: string
 
   /**
-   * Receiver-owner private key. If provided, `signIn()` will bind the user's
-   * derived account on-chain (simulating the production v2 attester flow:
-   * cofferdam-prover Container → cofferdam-attester Worker →
-   * NullifierRegistry.verifyAndBind on ZKSync Era). Without it, binding is
-   * the caller's responsibility and `signIn()` just returns an unbound
-   * address.
+   * Funded EOA private key. If provided, `signIn()` will pre-fund the user's
+   * derived account so it can post / award / dispute on-chain. PoC
+   * convenience only.
+   *
+   * On Base, identity binding is NOT performed with this key — the production
+   * path requires a Groth16 proof from the cofferdam-prover Container + an
+   * attester signature from the cofferdam-attester Worker, submitted via an
+   * ERC-4337 UserOp to `NullifierRegistry.verifyAndBind`.
    *
    * Production-deployed clients NEVER hold this key. It exists only to let
    * local PoC flows exercise the full happy path without orchestrating a
@@ -133,7 +131,7 @@ interface ResolvedConfig {
   scopeSalt: string
   rpcUrl: string
   chainId: number
-  contracts: { receiver: string; escrow?: string }
+  contracts: { nullifierRegistry: string; escrow?: string }
   mockUserId: string
   adminPrivateKey: string | null
   prefundWei: bigint
@@ -146,7 +144,7 @@ export class LocalChainProvider implements CofferdamProvider {
   readonly mode: NetworkMode = 'local'
 
   private readonly config: ResolvedConfig
-  private readonly chainProvider: ZkProvider
+  private readonly chainProvider: JsonRpcProvider
 
   constructor(config: LocalChainProviderConfig) {
     this.config = {
@@ -168,7 +166,7 @@ export class LocalChainProvider implements CofferdamProvider {
       },
       latencyMs: config.latencyMs ?? 0,
     }
-    this.chainProvider = new ZkProvider(this.config.rpcUrl)
+    this.chainProvider = new JsonRpcProvider(this.config.rpcUrl)
   }
 
   async signIn(policy: SignInPolicy): Promise<SignInResponse> {
@@ -205,14 +203,16 @@ export class LocalChainProvider implements CofferdamProvider {
 
     // ── (1) derive a deterministic EOA keypair from mockUserId ───────────────
     const userPk = await deriveDeterministicPrivateKey(this.config.mockUserId)
-    const userWallet = new ZkWallet(userPk, this.chainProvider)
+    const userWallet = new Wallet(userPk, this.chainProvider)
     const accountAddress = userWallet.address
 
-    // ── (2) admin-side: optionally pre-fund + bind on-chain ──────────────────
+    // ── (2) admin-side: optionally pre-fund the derived account ──────────────
+    // Note: identity binding is NOT performed here. On Base, binding requires
+    // a Groth16 proof (cofferdam-prover) + attester signature (cofferdam-attester)
+    // submitted via an ERC-4337 UserOp to NullifierRegistry.verifyAndBind.
     if (this.config.adminPrivateKey) {
-      const adminWallet = new ZkWallet(this.config.adminPrivateKey, this.chainProvider)
+      const adminWallet = new Wallet(this.config.adminPrivateKey, this.chainProvider)
       await this.maybePrefund(adminWallet, accountAddress)
-      await this.maybeBind(adminWallet, accountAddress)
     }
 
     // ── (3) derive Cofferdam-side identity material ──────────────────────────
@@ -252,7 +252,7 @@ export class LocalChainProvider implements CofferdamProvider {
   // Internals
   // ──────────────────────────────────────────────────────────────────────────
 
-  private async maybePrefund(adminWallet: ZkWallet, accountAddress: string): Promise<void> {
+  private async maybePrefund(adminWallet: Wallet, accountAddress: string): Promise<void> {
     if (this.config.prefundWei <= 0n) return
     const current = await this.chainProvider.getBalance(accountAddress)
     if (current >= this.config.prefundWei) return
@@ -267,36 +267,18 @@ export class LocalChainProvider implements CofferdamProvider {
     })
   }
 
-  private async maybeBind(adminWallet: ZkWallet, accountAddress: string): Promise<void> {
-    const receiver = new ZkContract(
-      this.config.contracts.receiver,
-      RECEIVER_ABI,
-      adminWallet,
-    )
-    // Idempotent: if already bound (e.g. from a previous test run on a
-    // long-lived node), skip. The on-chain contract enforces one-shot
-    // semantics — a second bind attempt would revert.
-    const already: boolean = await receiver.isAccountBound(accountAddress)
-    if (already) return
-
-    const nullifier = await deriveDeterministicNullifier(this.config.mockUserId)
-    // Same admin-queue treatment as maybePrefund: serialize + locally
-    // track the next nonce to dodge stale public-RPC reads.
-    const receipt = await runAdminTx<EthersReceipt | null>(
-      this.config.rpcUrl,
+  /**
+   * Check whether the user's account is identity-bound on-chain via
+   * `NullifierRegistry.isAccountBound`. This is a read-only check — actual
+   * binding requires the full prover + attester pipeline.
+   */
+  async isAccountBound(accountAddress: string): Promise<boolean> {
+    const registry = new EthContract(
+      this.config.contracts.nullifierRegistry,
+      NULLIFIER_REGISTRY_ABI,
       this.chainProvider,
-      adminWallet,
-      async (nonce) => {
-        const tx = await receiver.bindNullifier(accountAddress, nullifier, { nonce })
-        return tx.wait()
-      },
     )
-    if (!receipt || receipt.status !== 1) {
-      throw new SignInRejected(
-        'unknown' as SignInErrorCode,
-        `[cofferdam-sdk] bindNullifier failed for account ${accountAddress}`,
-      )
-    }
+    return registry.isAccountBound(accountAddress) as Promise<boolean>
   }
 }
 
@@ -305,7 +287,6 @@ export class LocalChainProvider implements CofferdamProvider {
 // ────────────────────────────────────────────────────────────────────────────
 
 const PRIVATE_KEY_SEED_SALT = 'cofferdam-local-privatekey-v1'
-const NULLIFIER_SEED_SALT = 'cofferdam-local-nullifier-v1'
 
 /**
  * Derive a 32-byte private key deterministically from a string id. Uses
@@ -321,15 +302,6 @@ async function deriveDeterministicPrivateKey(mockUserId: string): Promise<string
   // secp256k1 private keys must be in (0, n); n is just below 2^256. The
   // probability of HMAC output falling outside that range is ~2^-128 — we
   // ignore it for PoC. A 0x00...01 leading byte ensures we're never exactly 0.
-  return '0x' + bytesToHex(digest)
-}
-
-/**
- * Derive a deterministic 32-byte nullifier from a user id. Stand-in for the
- * Self.xyz Poseidon nullifier in α-2.
- */
-async function deriveDeterministicNullifier(mockUserId: string): Promise<string> {
-  const digest = await hmacSha256(NULLIFIER_SEED_SALT, mockUserId)
   return '0x' + bytesToHex(digest)
 }
 

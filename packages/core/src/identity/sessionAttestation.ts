@@ -53,9 +53,9 @@ export interface SessionAttestationFields {
   scope: string
   /** Per-app stable pseudonym (the consumer's primary user key). */
   appPseudonym: string
-  /** ZKSync Era smart-account address governing the session. */
+  /** Base smart-account address governing the session. */
   accountAddress: string
-  /** Chain id (260 local / 300 Sepolia / 324 mainnet). */
+  /** Chain id (31337 local / 84532 Base Sepolia / 8453 Base mainnet). */
   chainId: number
   /** Whether the user is Self-verified at issuance. */
   verified: boolean

@@ -1,4 +1,4 @@
-// Interactive harness for the native ZKSync Era Account Abstraction stack,
+// Interactive harness for the native Base Account Abstraction stack,
 // driven by the SDK's `NativeAccountProvider`. This is the production-shaped
 // sibling of LocalChainDemo: instead of a plain EOA, sign-in yields a
 // passkey-governed CofferdamSmartAccount, derived counterfactually (no chain
@@ -10,19 +10,19 @@
 //                          on-chain CofferdamAccountFactory).
 //   2. Deploy account    — CREATE2-deploy the smart account via the factory
 //                          (one-time; the address never changes).
-//   3. Sponsored tx      — send a native type-113 AA tx signed by the passkey
+//   3. Sponsored tx      — send an ERC-4337 UserOp signed by the passkey
 //                          and paid for by the CofferdamPaymaster, so the
 //                          account spends ZERO of its own ETH.
 //
 // Two networks via the `chain` prop:
-//   - chain="local"   : anvil-zksync. Reads VITE_NATIVE_* env; the admin key
-//                       defaults to anvil's public rich wallet #0 and is used
-//                       to deploy the account + fund the paymaster.
-//   - chain="testnet" : ZKSync Era Sepolia (chainId 300). VITE_NATIVE_* env;
-//                       admin key has NO default and must hold L2 ETH.
+//   - chain="local"   : base-anvil (forked Base). Reads VITE_NATIVE_* env; the
+//                       admin key defaults to anvil's public rich wallet #0
+//                       and is used to deploy the account + fund the paymaster.
+//   - chain="testnet" : Base Sepolia (chainId 84532). VITE_NATIVE_* env;
+//                       admin key has NO default and must hold ETH.
 
 import { useCallback, useMemo, useState } from 'react'
-import { Provider as ZkProvider, Wallet as ZkWallet } from 'zksync-ethers'
+import { JsonRpcProvider, Wallet as EthersWallet } from 'ethers'
 import { NativeAccountProvider } from '@cofferdam/sdk/native'
 import type { AuthorityState, SignInResponse } from '@cofferdam/sdk'
 
@@ -44,7 +44,7 @@ interface NativeConfig {
   explorerBase: string | null
 }
 
-// Anvil-zksync's public rich-wallet #0 — fully public, fine for local dev only.
+// Anvil's public rich-wallet #0 — fully public, fine for local dev only.
 const ANVIL_RICH_WALLET_PK =
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
 
@@ -52,27 +52,27 @@ function buildNativeConfig(chain: NativeChainTarget): NativeConfig {
   const env = import.meta.env
   if (chain === 'testnet') {
     return {
-      rpcUrl: (env.VITE_NATIVE_RPC_URL as string | undefined) ?? 'https://sepolia.era.zksync.dev',
-      chainId: Number(env.VITE_NATIVE_CHAIN_ID ?? 300),
-      factory: (env.VITE_NATIVE_FACTORY_ADDRESS as string | undefined) ?? '',
-      paymaster: (env.VITE_NATIVE_PAYMASTER_ADDRESS as string | undefined) ?? '',
-      passkeyModule: (env.VITE_NATIVE_PASSKEY_MODULE_ADDRESS as string | undefined) ?? '',
-      adminPrivateKey: (env.VITE_NATIVE_ADMIN_PRIVATE_KEY as string | undefined) ?? '',
+      rpcUrl: (env.VITE_NATIVE_TESTNET_RPC_URL as string | undefined) ?? 'https://sepolia.base.org',
+      chainId: Number(env.VITE_NATIVE_TESTNET_CHAIN_ID ?? 84532),
+      factory: (env.VITE_NATIVE_TESTNET_FACTORY_ADDRESS as string | undefined) ?? '',
+      paymaster: (env.VITE_NATIVE_TESTNET_PAYMASTER_ADDRESS as string | undefined) ?? '',
+      passkeyModule: (env.VITE_NATIVE_TESTNET_PASSKEY_MODULE_ADDRESS as string | undefined) ?? '',
+      adminPrivateKey: (env.VITE_NATIVE_TESTNET_ADMIN_PRIVATE_KEY as string | undefined) ?? '',
       userId: (env.VITE_NATIVE_USER_ID as string | undefined) ?? 'sepolia-native-1',
-      label: 'ZKSync Era Sepolia',
-      explorerBase: 'https://sepolia.explorer.zksync.io',
+      label: 'Base Sepolia',
+      explorerBase: 'https://sepolia.basescan.org',
     }
   }
   return {
-    rpcUrl: (env.VITE_NATIVE_RPC_URL as string | undefined) ?? 'http://127.0.0.1:8011',
-    chainId: Number(env.VITE_NATIVE_CHAIN_ID ?? 260),
+    rpcUrl: (env.VITE_NATIVE_RPC_URL as string | undefined) ?? 'http://127.0.0.1:8545',
+    chainId: Number(env.VITE_NATIVE_CHAIN_ID ?? 31337),
     factory: (env.VITE_NATIVE_FACTORY_ADDRESS as string | undefined) ?? '',
     paymaster: (env.VITE_NATIVE_PAYMASTER_ADDRESS as string | undefined) ?? '',
     passkeyModule: (env.VITE_NATIVE_PASSKEY_MODULE_ADDRESS as string | undefined) ?? '',
     adminPrivateKey:
       (env.VITE_NATIVE_ADMIN_PRIVATE_KEY as string | undefined) ?? ANVIL_RICH_WALLET_PK,
     userId: (env.VITE_NATIVE_USER_ID as string | undefined) ?? 'local-native-1',
-    label: 'anvil-zksync (local)',
+    label: 'base-anvil (local)',
     explorerBase: null,
   }
 }
@@ -101,7 +101,7 @@ interface NativeAccountDemoProps {
 
 export function NativeAccountDemo({ chain }: NativeAccountDemoProps) {
   const cfg = useMemo(() => buildNativeConfig(chain), [chain])
-  const rpc = useMemo(() => new ZkProvider(cfg.rpcUrl), [cfg.rpcUrl])
+  const rpc = useMemo(() => new JsonRpcProvider(cfg.rpcUrl), [cfg.rpcUrl])
 
   const missingAddrs = !cfg.factory || !cfg.paymaster || !cfg.passkeyModule
   const missingAdmin = !cfg.adminPrivateKey
@@ -121,6 +121,7 @@ export function NativeAccountDemo({ chain }: NativeAccountDemoProps) {
       userId: cfg.userId,
       deployerPrivateKey: cfg.adminPrivateKey,
       usePaymaster: true,
+      defaultGasLimit: 1_500_000n,
     })
   }, [cfg, configured])
 
@@ -198,7 +199,7 @@ export function NativeAccountDemo({ chain }: NativeAccountDemoProps) {
     setBusy('fund')
     const id = pushLog('Fund paymaster (admin → CofferdamPaymaster)')
     try {
-      const admin = new ZkWallet(cfg.adminPrivateKey, rpc)
+      const admin = new EthersWallet(cfg.adminPrivateKey, rpc)
       const tx = await admin.sendTransaction({ to: cfg.paymaster, value: 100_000_000_000_000_000n }) // 0.1 ETH
       await tx.wait()
       const bal = await rpc.getBalance(cfg.paymaster)

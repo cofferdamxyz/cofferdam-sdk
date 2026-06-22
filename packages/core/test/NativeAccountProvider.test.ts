@@ -1,12 +1,12 @@
 // Integration tests for NativeAccountProvider.
 //
 // These need:
-//   1. anvil-zksync running at http://127.0.0.1:8011 (chainId 260)
-//   2. The native-AA stack + authority modules deployed via
-//        cd ../contracts && yarn deploy:auth:local && yarn deploy:native:local
-//      which writes CofferdamAccountFactory / CofferdamPaymaster / PasskeyAuthority
-//      to contracts/deployments/inMemoryNode.json
-//   3. anvil-zksync rich wallet #0 as the PoC deployer (funds deploys + paymaster)
+//   1. base-anvil running at http://127.0.0.1:8545 (chainId 31337)
+//   2. The ERC-4337 stack + authority modules deployed via
+//        cd ../base-contracts && yarn deploy:local
+//      which writes CofferdamAccountFactory4337 / CofferdamPaymaster /
+//      WebAuthnPasskeyAuthority to base-contracts/deployments/localhost.json
+//   3. base-anvil rich wallet #0 as the PoC deployer (funds deploys + paymaster)
 //
 // If any are missing the describe block skips (so plain `vitest` stays green in
 // CI without a chain). Set COFFERDAM_LOCAL_INTEGRATION=1 to force-fail instead.
@@ -14,7 +14,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it, beforeAll } from 'vitest'
-import { Provider as ZkProvider, Wallet as ZkWallet, Contract as ZkContract } from 'zksync-ethers'
+import { JsonRpcProvider, Wallet as EthWallet, Contract as EthContract } from 'ethers'
 import {
   NativeAccountProvider,
   DeterministicPasskeySigner,
@@ -24,9 +24,9 @@ import {
   SignInRejected,
 } from '../src/index.js'
 
-const RPC_URL = 'http://127.0.0.1:8011'
-const CHAIN_ID = 260
-const DEPLOYER_PK = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // anvil-zksync rich #0
+const RPC_URL = 'http://127.0.0.1:8545'
+const CHAIN_ID = 31337
+const DEPLOYER_PK = '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' // base-anvil rich #2
 
 interface NativeDeployment {
   factory: string
@@ -42,15 +42,15 @@ function loadDeployment(): NativeDeployment | null {
     '..',
     '..',
     '..',
-    'contracts',
+    'base-contracts',
     'deployments',
-    'inMemoryNode.json',
+    'localhost.json',
   )
   if (!fs.existsSync(p)) return null
   const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-  const factory = raw.CofferdamAccountFactory?.address
+  const factory = raw.CofferdamAccountFactory4337?.address
   const paymaster = raw.CofferdamPaymaster?.address
-  const passkeyModule = raw.PasskeyAuthority?.address
+  const passkeyModule = raw.PasskeyAuthority?.address ?? raw.WebAuthnPasskeyAuthority?.address
   if (!factory || !paymaster || !passkeyModule) return null
   return { factory, paymaster, passkeyModule }
 }
@@ -72,8 +72,8 @@ async function nodeReachable(): Promise<boolean> {
 
 const FORCE = process.env.COFFERDAM_LOCAL_INTEGRATION === '1'
 
-const FACTORY_ABI = [
-  'function getAccountAddress(bytes32 salt, address initialModule, bytes initialConfig) view returns (address)',
+const FACTORY_ABI: string[] = [
+  'function getAddress(address initialModule, bytes initialConfig, bytes32 salt) view returns (address)',
 ]
 
 describe('NativeAccountProvider (integration)', () => {
@@ -87,8 +87,8 @@ describe('NativeAccountProvider (integration)', () => {
     if (!d || !node) {
       skip = true
       skipReason = !node
-        ? `anvil-zksync not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
-        : 'native-AA stack missing from contracts/deployments/inMemoryNode.json — run `yarn deploy:auth:local && yarn deploy:native:local`'
+        ? `base-anvil not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
+        : 'ERC-4337 stack missing from base-contracts/deployments/localhost.json — run `yarn deploy:local`'
       if (FORCE) throw new Error(`[NativeAccountProvider integration] ${skipReason}`)
       // eslint-disable-next-line no-console
       console.warn(`[NativeAccountProvider integration] skipping: ${skipReason}`)
@@ -140,9 +140,9 @@ describe('NativeAccountProvider (integration)', () => {
     const pub = await new DeterministicPasskeySigner(userId).publicKey()
     const config = encodePasskeyConfig(pub)
 
-    const chain = new ZkProvider(RPC_URL)
-    const factory = new ZkContract(dep.factory, FACTORY_ABI, chain)
-    const onchain: string = await factory.getAccountAddress(salt, dep.passkeyModule, config)
+    const chain = new JsonRpcProvider(RPC_URL)
+    const factory = new EthContract(dep.factory, FACTORY_ABI, chain)
+    const onchain: string = await factory.getFunction('getAddress')(dep.passkeyModule, config, salt)
     expect(result.accountAddress.toLowerCase()).toBe(onchain.toLowerCase())
   }, 30_000)
 
@@ -167,7 +167,7 @@ describe('NativeAccountProvider (integration)', () => {
     const addr = await provider.ensureDeployed()
     expect(await provider.isDeployed()).toBe(true)
 
-    const chain = new ZkProvider(RPC_URL)
+    const chain = new JsonRpcProvider(RPC_URL)
     expect(await chain.getCode(addr)).not.toBe('0x')
 
     const state = await provider.getAuthorityState()
@@ -184,20 +184,19 @@ describe('NativeAccountProvider (integration)', () => {
     const accountAddress = await provider.getAccountAddress()
 
     // Fund the paymaster (the sponsor), NOT the account.
-    const chain = new ZkProvider(RPC_URL)
-    const deployer = new ZkWallet(DEPLOYER_PK, chain)
+    const chain = new JsonRpcProvider(RPC_URL)
+    const deployer = new EthWallet(DEPLOYER_PK, chain)
     await (await deployer.sendTransaction({ to: dep.paymaster, value: 1_000_000_000_000_000_000n })).wait()
 
     expect(await chain.getBalance(accountAddress)).toBe(0n)
 
     // No-op call (value 0, empty data) to a benign target — exercises the full
-    // bootloader path: deploy → passkey validate → paymaster pay → execute.
+    // ERC-4337 path: deploy → passkey validate → paymaster sponsor → execute.
     const receipt = await provider.sendTransaction({ to: deployer.address, value: 0n })
     expect(receipt.status).toBe(1)
 
-    // The account paid no fee: still zero balance, nonce advanced to 1.
+    // The account paid no fee: still zero balance.
     expect(await chain.getBalance(accountAddress)).toBe(0n)
-    expect(await chain.getTransactionCount(accountAddress)).toBe(1)
   }, 90_000)
 
   it('signIn() rejects a user excluded by policy.allowedCountries', async () => {
@@ -210,16 +209,15 @@ describe('NativeAccountProvider (integration)', () => {
   it('lists, adds (with ≤3 cap), revokes authorities and resolves a backup device id', async () => {
     if (skip) return
 
-    // Fund the paymaster so every management self-call is gasless.
-    const chain = new ZkProvider(RPC_URL)
-    const deployer = new ZkWallet(DEPLOYER_PK, chain)
-    await (
-      await deployer.sendTransaction({ to: dep.paymaster, value: 3_000_000_000_000_000_000n })
-    ).wait()
+    // Pre-fund the account (no paymaster for management txs in local dev).
+    const chain = new JsonRpcProvider(RPC_URL)
+    const deployer = new EthWallet(DEPLOYER_PK, chain)
 
     const base = `nap-multi-${Date.now()}`
-    const primary = mkProvider(base)
-    const accountAddress = await primary.ensureDeployed()
+    const primary = mkProvider(base, { usePaymaster: false })
+    const accountAddress = await primary.getAccountAddress()
+    await (await deployer.sendTransaction({ to: accountAddress, value: 1_000_000_000_000_000_000n })).wait()
+    await primary.ensureDeployed()
 
     // Bootstrap: a single self passkey at id 0.
     let list = await primary.listAuthorities()
@@ -248,6 +246,7 @@ describe('NativeAccountProvider (integration)', () => {
     const backup = mkProvider(`${base}-backup-dev`, {
       signer: backupSigner,
       accountAddress,
+      usePaymaster: false,
     })
     expect(await backup.resolveOwnAuthorityId()).toBe(1)
     const backupView = await backup.listAuthorities()

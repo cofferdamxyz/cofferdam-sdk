@@ -11,6 +11,8 @@
     "dev:sepolia-testnet": "VITE_COFFERDAM_NETWORK=sepolia-testnet vite",
     "dev:native-aa": "VITE_COFFERDAM_NETWORK=native-aa vite",
     "dev:native-aa-testnet": "VITE_COFFERDAM_NETWORK=native-aa-testnet vite",
+    "dev:web2-auth": "VITE_COFFERDAM_NETWORK=web2-auth vite",
+    "dev:web2-auth-testnet": "VITE_COFFERDAM_NETWORK=web2-auth-testnet vite",
     "tail": "node scripts/tail-chain.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
@@ -29,8 +31,7 @@
     "@cofferdam/sdk-react": "*",
     "ethers": "^6.13.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "zksync-ethers": "^6.15.0"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

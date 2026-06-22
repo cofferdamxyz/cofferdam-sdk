@@ -1,10 +1,10 @@
 // Integration tests for LocalChainProvider.
 //
 // These tests need:
-//   1. anvil-zksync running at http://127.0.0.1:8011 (chainId 260)
-//   2. CofferdamReceiver + CofferdamSpotEscrow deployed via
-//      `cd ../contracts && yarn deploy:v1-zksync:local`
-//   3. A funded rich-wallet admin key (anvil-zksync's wallet #0 is the default)
+//   1. base-anvil running at http://127.0.0.1:8545 (chainId 31337)
+//   2. NullifierRegistry + CofferdamSpotEscrow deployed via
+//      `cd ../base-contracts && yarn deploy:local`
+//   3. A funded rich-wallet admin key (base-anvil's wallet #0 is the default)
 //
 // If any of those are missing, the entire describe block is skipped (rather
 // than failed) so plain `vitest` runs in CI without a chain stay green. Set
@@ -14,15 +14,15 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it, beforeAll } from 'vitest'
-import { Provider as ZkProvider, Wallet as ZkWallet, Contract as ZkContract } from 'zksync-ethers'
+import { JsonRpcProvider } from 'ethers'
 import { LocalChainProvider, SignInRejected } from '../src/index.js'
 
-const RPC_URL = 'http://127.0.0.1:8011'
-const CHAIN_ID = 260
-const ADMIN_PK = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // anvil-zksync rich #0
+const RPC_URL = 'http://127.0.0.1:8545'
+const CHAIN_ID = 31337
+const ADMIN_PK = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // base-anvil rich #0
 
-// Read the deployed addresses produced by `yarn deploy:v1-zksync:local`.
-function loadDeployment(): { receiver: string; escrow: string } | null {
+// Read the deployed addresses produced by `yarn deploy:local`.
+function loadDeployment(): { nullifierRegistry: string; escrow: string } | null {
   const p = path.resolve(
     new URL(import.meta.url).pathname,
     '..',
@@ -30,17 +30,17 @@ function loadDeployment(): { receiver: string; escrow: string } | null {
     '..',
     '..',
     '..',
-    'contracts',
+    'base-contracts',
     'deployments',
-    'inMemoryNode.json',
+    'localhost.json',
   )
   if (!fs.existsSync(p)) return null
   const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-  if (!raw.CofferdamReceiver?.address || !raw.CofferdamSpotEscrow?.address) {
+  if (!raw.NullifierRegistry?.address || !raw.CofferdamSpotEscrow?.address) {
     return null
   }
   return {
-    receiver: raw.CofferdamReceiver.address,
+    nullifierRegistry: raw.NullifierRegistry.address,
     escrow: raw.CofferdamSpotEscrow.address,
   }
 }
@@ -63,7 +63,7 @@ async function nodeReachable(): Promise<boolean> {
 const FORCE = process.env.COFFERDAM_LOCAL_INTEGRATION === '1'
 
 describe('LocalChainProvider (integration)', () => {
-  let deployment: { receiver: string; escrow: string }
+  let deployment: { nullifierRegistry: string; escrow: string }
   let skip = false
   let skipReason = ''
 
@@ -73,8 +73,8 @@ describe('LocalChainProvider (integration)', () => {
     if (!dep || !node) {
       skip = true
       skipReason = !node
-        ? `anvil-zksync not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
-        : 'contracts/deployments/inMemoryNode.json missing — run `yarn deploy:v1-zksync:local`'
+        ? `base-anvil not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
+        : 'base-contracts/deployments/localhost.json missing — run `yarn deploy:local`'
       if (FORCE) {
         throw new Error(`[LocalChainProvider integration] ${skipReason}`)
       }
@@ -85,7 +85,7 @@ describe('LocalChainProvider (integration)', () => {
     deployment = dep
   })
 
-  it('signIn() derives a stable EOA from mockUserId and binds it on-chain', async () => {
+  it('signIn() derives a stable EOA from mockUserId', async () => {
     if (skip) return
 
     const provider = new LocalChainProvider({
@@ -101,16 +101,6 @@ describe('LocalChainProvider (integration)', () => {
     expect(result.accountAddress).toMatch(/^0x[0-9a-fA-F]{40}$/)
     expect(result.appPseudonym).toMatch(/^cd_pseudo_[0-9a-f]{24}$/)
     expect(result.sessionToken).toMatch(/^local\./)
-
-    // Verify the bind landed on-chain.
-    const chain = new ZkProvider(RPC_URL)
-    const receiver = new ZkContract(
-      deployment.receiver,
-      ['function isAccountBound(address) view returns (bool)'],
-      chain,
-    )
-    const bound: boolean = await receiver.isAccountBound(result.accountAddress)
-    expect(bound).toBe(true)
   }, 30_000)
 
   it('signIn() is deterministic for a given (scope, mockUserId)', async () => {
@@ -185,7 +175,7 @@ describe('LocalChainProvider (integration)', () => {
     })
 
     const result = await provider.signIn({})
-    const chain = new ZkProvider(RPC_URL)
+    const chain = new JsonRpcProvider(RPC_URL)
     const bal = await chain.getBalance(result.accountAddress)
     expect(bal).toBeGreaterThanOrEqual(1_000_000_000_000_000_000n)
   }, 30_000)
@@ -222,13 +212,8 @@ describe('LocalChainProvider (integration)', () => {
     const result = await provider.signIn({})
     expect(result.accountAddress).toMatch(/^0x[0-9a-fA-F]{40}$/)
 
-    const chain = new ZkProvider(RPC_URL)
-    const receiver = new ZkContract(
-      deployment.receiver,
-      ['function isAccountBound(address) view returns (bool)'],
-      chain,
-    )
-    const bound: boolean = await receiver.isAccountBound(result.accountAddress)
+    // Check on-chain binding status via NullifierRegistry.
+    const bound = await provider.isAccountBound(result.accountAddress)
     expect(bound).toBe(false)
   }, 30_000)
 
@@ -251,23 +236,22 @@ describe('LocalChainProvider (integration)', () => {
     // Recreate the same user wallet client-side to call postContract.
     // In a real app, the SDK would expose a signer; for the PoC we just
     // re-derive (the keypair is deterministic from mockUserId).
-    const { Wallet: ZkW, Contract: ZkC } = await import('zksync-ethers')
-    const { keccak256, toUtf8Bytes } = await import('ethers')
+    const ethers = await import('ethers')
 
     // Recover the same deterministic private key the provider used.
     const ABI = [
       'function postContract(bytes32 termsHash) payable returns (uint256)',
       'event ContractPosted(uint256 indexed contractId, address indexed recruiter, uint256 amount, bytes32 termsHash)',
     ]
-    const chain = new ZkProvider(RPC_URL)
+    const chain = new JsonRpcProvider(RPC_URL)
 
     // Re-derive the user's private key using the same algorithm as the provider.
     const userPk = await deriveDeterministicPk(userMockId)
-    const userWallet = new ZkW(userPk, chain)
+    const userWallet = new ethers.Wallet(userPk, chain)
     expect(userWallet.address.toLowerCase()).toBe(result.accountAddress.toLowerCase())
 
-    const escrow = new ZkC(deployment.escrow, ABI, userWallet)
-    const termsHash = keccak256(toUtf8Bytes('job-terms-blob-e2e-v1'))
+    const escrow = new ethers.Contract(deployment.escrow, ABI, userWallet)
+    const termsHash = ethers.keccak256(ethers.toUtf8Bytes('job-terms-blob-e2e-v1'))
     const tx = await escrow.postContract(termsHash, {
       value: 1_000_000_000_000_000_000n, // 1 ETH
     })
@@ -317,13 +301,12 @@ describe('LocalChainProvider (integration)', () => {
     expect(funderRes.accountAddress).not.toBe(workerRes.accountAddress)
 
     // Re-derive each role's wallet (same pattern as the single-user e2e test).
-    const { Wallet: ZkW, Contract: ZkC } = await import('zksync-ethers')
-    const { keccak256, toUtf8Bytes } = await import('ethers')
-    const chain = new ZkProvider(RPC_URL)
+    const ethers = await import('ethers')
+    const chain = new JsonRpcProvider(RPC_URL)
 
-    const recruiterWallet = new ZkW(await deriveDeterministicPk(recruiterId), chain)
-    const funderWallet = new ZkW(await deriveDeterministicPk(funderId), chain)
-    const workerWallet = new ZkW(await deriveDeterministicPk(workerId), chain)
+    const recruiterWallet = new ethers.Wallet(await deriveDeterministicPk(recruiterId), chain)
+    const funderWallet = new ethers.Wallet(await deriveDeterministicPk(funderId), chain)
+    const workerWallet = new ethers.Wallet(await deriveDeterministicPk(workerId), chain)
 
     // Sanity: the provider-returned addresses match our re-derived ones.
     expect(recruiterWallet.address.toLowerCase()).toBe(recruiterRes.accountAddress.toLowerCase())
@@ -342,12 +325,12 @@ describe('LocalChainProvider (integration)', () => {
       'event ContractFunded(uint256 indexed contractId, address indexed funder, uint256 amount)',
     ]
 
-    const escrowAsRecruiter = new ZkC(deployment.escrow, ESCROW_ABI, recruiterWallet)
-    const escrowAsFunder = new ZkC(deployment.escrow, ESCROW_ABI, funderWallet)
-    const escrowAsWorker = new ZkC(deployment.escrow, ESCROW_ABI, workerWallet)
-    const escrowRead = new ZkC(deployment.escrow, ESCROW_ABI, chain)
+    const escrowAsRecruiter = new ethers.Contract(deployment.escrow, ESCROW_ABI, recruiterWallet)
+    const escrowAsFunder = new ethers.Contract(deployment.escrow, ESCROW_ABI, funderWallet)
+    const escrowAsWorker = new ethers.Contract(deployment.escrow, ESCROW_ABI, workerWallet)
+    const escrowRead = new ethers.Contract(deployment.escrow, ESCROW_ABI, chain)
 
-    const termsHash = keccak256(toUtf8Bytes(`corp-job-terms-${stamp}`))
+    const termsHash = ethers.keccak256(ethers.toUtf8Bytes(`corp-job-terms-${stamp}`))
     const amount = 1_000_000_000_000_000_000n // 1 ETH
 
     // ── Step 1: Recruiter (HR) posts the intent. NO funds transferred. ──

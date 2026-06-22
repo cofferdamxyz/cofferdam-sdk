@@ -230,6 +230,73 @@ code {
   color: #065f46;
 }
 
+/* ── Lifecycle flow groups ────────────────────────────────────────────── */
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.flow-phase {
+  padding: 0.75rem 0.875rem;
+  border: 1px solid #d8e3f1;
+  border-radius: 0.5rem;
+  background: #fafcff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.flow-phase-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #344050;
+}
+
+.flow-state {
+  font-size: 0.688rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #0a66c2;
+  background: #e8f0fb;
+  border: 1px solid #cfe0f5;
+  border-radius: 999px;
+  padding: 0.125rem 0.5rem;
+}
+
+.flow-branch {
+  border-left: 2px solid #e2e8f0;
+  padding-left: 0.75rem;
+  margin-left: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.flow-branch-head {
+  font-size: 0.688rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+}
+
+.action-cancel {
+  background: #fff5f5;
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.action-cancel:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #f87171;
+  color: #b42318;
+}
+
 .activity {
   list-style: none;
   margin: 0;

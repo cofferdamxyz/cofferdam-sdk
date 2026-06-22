@@ -1,25 +1,26 @@
-// Interactive harness for the v1/zksync contracts. Drives the same UI + flow
+// Interactive harness for the Base contracts. Drives the same UI + flow
 // against either of two networks, selected by the `chain` prop:
 //
-//   - chain="local"   : anvil-zksync (in-memory ZKSync Era node).
+//   - chain="local"   : base-anvil (forked Base node).
 //                       Reads VITE_LOCAL_* env vars; defaults are anvil's
-//                       public rich-wallet #0 + http://127.0.0.1:8011.
+//                       public rich-wallet #0 + http://127.0.0.1:8545.
 //                       Demo amounts: 0.1 ETH per job, 0.5–1.5 ETH pre-funds.
 //
-//   - chain="testnet" : ZKSync Era Sepolia (chainId 300).
+//   - chain="testnet" : Base Sepolia (chainId 84532).
 //                       Reads VITE_TESTNET_* env vars. Defaults to the
 //                       deployed Receiver/Escrow addresses (see README §6),
-//                       Sepolia public RPC, scaled-down amounts (~100×
+//                       Base Sepolia public RPC, scaled-down amounts (~100×
 //                       smaller so the admin's faucet ETH lasts more than 2
 //                       runs), clickable block-explorer links on every tx.
 //                       VITE_TESTNET_ADMIN_PRIVATE_KEY MUST be set — there's
 //                       no public default for a testnet admin.
 //
-// Three roles in a single page, each backed by its own `LocalChainProvider`:
+// Four roles in a single page, each backed by its own `LocalChainProvider`:
 //
-//   - Recruiter (HR)   : drafts contracts, awards workers
-//   - Funder    (CFO)  : pays the locked amount for drafts they were designated for
-//   - Worker    (Crew) : checks in / out, receives the settled payout
+//   - Recruiter (HR)   : assigns/replaces the on-site supervisor as witness
+//   - Funder    (CFO)  : approves USDC, funds the escrow, can refund/void
+//   - Supervisor(Witness): checks worker in/out, attests work done
+//   - Worker    (Crew) : assigned to vacancy, receives USDC on checkout
 //
 // Every on-chain action produces a row in the Activity log with a status
 // (pending → success / error), tx hash, and a one-line summary.
@@ -27,7 +28,7 @@
 // Notes:
 //   - The "admin private key" binds identities + pre-funds role EOAs. On
 //     local mode it defaults to anvil's public rich-wallet #0; on testnet
-//     mode it MUST be supplied by the operator and must hold L2 ETH. NEVER
+//     mode it MUST be supplied by the operator and must hold ETH. NEVER
 //     reuse anvil's key on testnet — it's public.
 //   - The recruiter / funder / worker EOAs are deterministic from their
 //     mockUserId env vars; re-running with the same IDs reuses the same
@@ -37,17 +38,13 @@
 //     escrow client on the SDK".
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Provider as ZkProvider,
-  Wallet as ZkWallet,
-} from 'zksync-ethers'
+import { JsonRpcProvider, Wallet as EthersWallet, Contract as EthContract, id as ethersId, randomBytes, hexlify } from 'ethers'
 import { LocalChainProvider } from '@cofferdam/sdk/local'
 import {
   CofferdamSpotEscrowClient,
-  OPEN_FUNDING,
+  CofferdamEscrowFactoryClient,
   type SignInResponse,
 } from '@cofferdam/sdk'
-import { useFunderPicker } from '@cofferdam/sdk-react'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Env-driven config
@@ -60,28 +57,31 @@ interface ChainConfig {
   chainId: number
   receiver: string
   escrow: string
+  factoryAddress: string
   adminPrivateKey: string
   recruiterId: string
   funderId: string
   workerId: string
-  amountWei: bigint
-  prefunds: { recruiter: bigint; funder: bigint; worker: bigint }
+  supervisorId: string
+  amountUsdc: bigint // 6-decimal USDC amount for escrow funding
+  prefunds: { recruiter: bigint; funder: bigint; worker: bigint; supervisor: bigint }
   label: string
-  explorerBase: string | null // null on local; full origin on testnet (e.g. https://sepolia.explorer.zksync.io)
+  explorerBase: string | null
 }
 
-// Anvil-zksync's public rich-wallet #0. Fully public, hard-coded in the
-// vendored binary — fine for local dev, NEVER use it where there's value.
+// Anvil's public rich-wallet #0. Fully public, hard-coded in the
+// binary — fine for local dev, NEVER use it where there's value.
 const ANVIL_RICH_WALLET_PK =
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
 
-// Sepolia α-2 deploy from May 2026 — see README §6 + contracts/deployments/
-// zkSyncSepolia.json. Hard-coded as the default for the testnet demo so
-// users don't have to copy-paste addresses; can still be overridden via
-// VITE_TESTNET_*_ADDRESS if a fresh redeploy happens.
+// Base Sepolia deploy — see README §6 + base-contracts/deployments/.
+// Hard-coded as the default for the testnet demo so users don't have to
+// copy-paste addresses; can still be overridden via VITE_TESTNET_*_ADDRESS
+// if a fresh redeploy happens.
 const SEPOLIA_DEFAULTS = {
-  receiver: '0x6b4D8580f72C1D3Eb9825aD6EE56c67ED0F1B9Bb',
-  escrow: '0x2F22FE817dAA3Bff101f888C94F3ce0814880535',
+  receiver: '',
+  escrow: '',
+  factoryAddress: '',
 } as const
 
 function buildConfig(chain: ChainTarget): ChainConfig {
@@ -90,14 +90,17 @@ function buildConfig(chain: ChainTarget): ChainConfig {
     return {
       rpcUrl:
         (env.VITE_TESTNET_RPC_URL as string | undefined) ??
-        'https://sepolia.era.zksync.dev',
-      chainId: Number(env.VITE_TESTNET_CHAIN_ID ?? 300),
+        'https://sepolia.base.org',
+      chainId: Number(env.VITE_TESTNET_CHAIN_ID ?? 84532),
       receiver:
         (env.VITE_TESTNET_RECEIVER_ADDRESS as string | undefined) ??
         SEPOLIA_DEFAULTS.receiver,
       escrow:
         (env.VITE_TESTNET_ESCROW_ADDRESS as string | undefined) ??
         SEPOLIA_DEFAULTS.escrow,
+      factoryAddress:
+        (env.VITE_TESTNET_FACTORY_ADDRESS as string | undefined) ??
+        SEPOLIA_DEFAULTS.factoryAddress,
       // No default for testnet admin — there's no public-key analog of anvil's
       // rich wallet. Empty string here surfaces a clear error in the UI before
       // anything tries to sign.
@@ -108,38 +111,45 @@ function buildConfig(chain: ChainTarget): ChainConfig {
         (env.VITE_TESTNET_FUNDER_ID as string | undefined) ?? 'sepolia-finance-1',
       workerId:
         (env.VITE_TESTNET_WORKER_ID as string | undefined) ?? 'sepolia-worker-1',
+      supervisorId:
+        (env.VITE_TESTNET_SUPERVISOR_ID as string | undefined) ?? 'sepolia-supervisor-1',
       // Scaled 100× smaller than local so a 0.05 ETH faucet stash covers
       // ~25 full demo runs instead of ~2.
-      amountWei: 1_000_000_000_000_000n, // 0.001 ETH per demo job
+      amountUsdc: 1_000_000n, // 1 USDC per demo job (6 decimals)
       prefunds: {
         recruiter: 5_000_000_000_000_000n, // 0.005 ETH (gas only)
-        funder: 15_000_000_000_000_000n, // 0.015 ETH (covers amount + gas)
+        funder: 15_000_000_000_000_000n, // 0.015 ETH (gas + USDC for funding)
         worker: 5_000_000_000_000_000n, // 0.005 ETH (gas only)
+        supervisor: 5_000_000_000_000_000n, // 0.005 ETH (gas only)
       },
-      label: 'ZKSync Era Sepolia',
-      explorerBase: 'https://sepolia.explorer.zksync.io',
+      label: 'Base Sepolia',
+      explorerBase: 'https://sepolia.basescan.org',
     }
   }
   // chain === 'local'
   return {
     rpcUrl:
-      (env.VITE_LOCAL_RPC_URL as string | undefined) ?? 'http://127.0.0.1:8011',
-    chainId: Number(env.VITE_LOCAL_CHAIN_ID ?? 260),
+      (env.VITE_LOCAL_RPC_URL as string | undefined) ?? 'http://127.0.0.1:8545',
+    chainId: Number(env.VITE_LOCAL_CHAIN_ID ?? 31337),
     receiver: (env.VITE_LOCAL_RECEIVER_ADDRESS as string | undefined) ?? '',
     escrow: (env.VITE_LOCAL_ESCROW_ADDRESS as string | undefined) ?? '',
+    factoryAddress: (env.VITE_LOCAL_FACTORY_ADDRESS as string | undefined) ?? '',
     adminPrivateKey:
       (env.VITE_LOCAL_ADMIN_PRIVATE_KEY as string | undefined) ?? ANVIL_RICH_WALLET_PK,
     recruiterId:
       (env.VITE_LOCAL_RECRUITER_ID as string | undefined) ?? 'local-recruiter-1',
     funderId: (env.VITE_LOCAL_FUNDER_ID as string | undefined) ?? 'local-finance-1',
     workerId: (env.VITE_LOCAL_WORKER_ID as string | undefined) ?? 'local-worker-1',
-    amountWei: 100_000_000_000_000_000n, // 0.1 ETH per demo job
+    supervisorId:
+      (env.VITE_LOCAL_SUPERVISOR_ID as string | undefined) ?? 'local-supervisor-1',
+    amountUsdc: 100_000_000n, // 100 USDC per demo job (6 decimals)
     prefunds: {
-      recruiter: 500_000_000_000_000_000n, // 0.5 ETH
-      funder: 1_500_000_000_000_000_000n, // 1.5 ETH (covers amount + gas)
+      recruiter: 500_000_000_000_000_000n, // 0.5 ETH (gas only)
+      funder: 1_500_000_000_000_000_000n, // 1.5 ETH (gas + USDC for funding)
       worker: 100_000_000_000_000_000n, // 0.1 ETH (gas only)
+      supervisor: 100_000_000_000_000_000n, // 0.1 ETH (gas only)
     },
-    label: 'anvil-zksync (local)',
+    label: 'base-anvil (local)',
     explorerBase: null,
   }
 }
@@ -148,7 +158,7 @@ function buildConfig(chain: ChainTarget): ChainConfig {
 // Types
 // ────────────────────────────────────────────────────────────────────────────
 
-type Role = 'recruiter' | 'funder' | 'worker'
+type Role = 'recruiter' | 'funder' | 'worker' | 'supervisor'
 
 interface RoleConfig {
   mockUserId: string
@@ -163,6 +173,7 @@ const ROLE_META: Record<Role, { label: string; emoji: string }> = {
   recruiter: { label: 'Recruiter (HR)', emoji: '👤' },
   funder: { label: 'Funder (Finance)', emoji: '💼' },
   worker: { label: 'Worker (Crew)', emoji: '⚓' },
+  supervisor: { label: 'Supervisor (Witness)', emoji: '🔧' },
 }
 
 function buildRoles(cfg: ChainConfig): Record<Role, RoleConfig> {
@@ -182,13 +193,19 @@ function buildRoles(cfg: ChainConfig): Record<Role, RoleConfig> {
       prefundWei: cfg.prefunds.worker,
       ...ROLE_META.worker,
     },
+    supervisor: {
+      mockUserId: cfg.supervisorId,
+      prefundWei: cfg.prefunds.supervisor,
+      ...ROLE_META.supervisor,
+    },
   }
 }
 
 interface RoleState {
   session: SignInResponse | null
-  wallet: ZkWallet | null
+  wallet: EthersWallet | null
   balance: bigint | null
+  usdcBalance: bigint | null
   signing: boolean
   error: string | null
 }
@@ -199,9 +216,6 @@ interface TxEntry {
   status: 'pending' | 'success' | 'error'
   hash?: string
   error?: string
-  contractId?: bigint
-  // Captured at tx creation so the activity row can render a clickable
-  // explorer link without having to know the current `chain` prop.
   explorerBase?: string | null
 }
 
@@ -234,11 +248,18 @@ function shortAddr(addr: string | null | undefined): string {
 
 function fmtEth(wei: bigint | null): string {
   if (wei == null) return '—'
-  // 18 decimals → quick truncating formatter (good enough for a demo UI).
   const whole = wei / 1_000_000_000_000_000_000n
   const frac = wei % 1_000_000_000_000_000_000n
   const fracStr = frac.toString().padStart(18, '0').slice(0, 4)
   return `${whole}.${fracStr} ETH`
+}
+
+function fmtUsdc(micro: bigint | null): string {
+  if (micro == null) return '—'
+  const whole = micro / 1_000_000n
+  const frac = micro % 1_000_000n
+  const fracStr = frac.toString().padStart(6, '0').slice(0, 2)
+  return `${whole}.${fracStr} USDC`
 }
 
 function rid(): string {
@@ -256,43 +277,35 @@ interface LocalChainDemoProps {
 export function LocalChainDemo({ chain }: LocalChainDemoProps) {
   const cfg = useMemo(() => buildConfig(chain), [chain])
   const rolesMeta = useMemo(() => buildRoles(cfg), [cfg])
-  const rpc = useMemo(() => new ZkProvider(cfg.rpcUrl), [cfg.rpcUrl])
+  const rpc = useMemo(() => new JsonRpcProvider(cfg.rpcUrl), [cfg.rpcUrl])
 
-  // Configured = enough info to actually fire txs. Receiver/Escrow always
-  // have defaults on testnet (the deployed Sepolia addresses), but the
-  // adminPrivateKey has no public default — testnet operators must supply
-  // their own funded key. Local mode falls back to anvil's rich wallet.
+  // Configured = enough info to actually fire txs. Receiver is always
+  // needed. Escrow is needed for the pre-deployed sample; factory is needed
+  // for the "Create Escrow" action. At least one must be present.
   const missingAdmin = !cfg.adminPrivateKey
-  const missingAddrs = !cfg.receiver || !cfg.escrow
+  const missingAddrs = !cfg.receiver || (!cfg.escrow && !cfg.factoryAddress)
   const configured = !missingAddrs && !missingAdmin
 
   const [roles, setRoles] = useState<Record<Role, RoleState>>({
     recruiter: emptyRoleState(),
     funder: emptyRoleState(),
     worker: emptyRoleState(),
+    supervisor: emptyRoleState(),
   })
   const [txs, setTxs] = useState<TxEntry[]>([])
-  const [lastContractId, setLastContractId] = useState<bigint | null>(null)
-
-  // Corporate-flow funder picker. The signed-in Finance role is offered as a
-  // suggestion (the canonical demo path), but the recruiter is free to type
-  // any address or pick OPEN_FUNDING. Persisted per chain target so flipping
-  // between local/testnet doesn't cross-contaminate recent picks.
-  const funderSuggestions = useMemo(() => {
-    const finance = roles.funder.session?.accountAddress
-    if (!finance) return []
-    return [{ address: finance, label: 'Sign-in: Finance' }]
-  }, [roles.funder.session?.accountAddress])
-  const funderPicker = useFunderPicker({
-    suggestions: funderSuggestions,
-    storageKey: `cofferdam:funders:capacitor-minimal:${chain}`,
-  })
-
-  // Resolve which address to actually pass to postContractIntent: picker
-  // selection wins, fall back to the signed-in Finance role for one-click
-  // demo continuity.
-  const designatedFunderAddress =
-    funderPicker.selectedFunder?.address ?? roles.funder.session?.accountAddress ?? null
+  const [escrowAddr, setEscrowAddr] = useState<string>(cfg.escrow)
+  const [escrowUsdcBalance, setEscrowUsdcBalance] = useState<bigint | null>(null)
+  // Offer's kill fee in bps. Range 5%-25% (enforced on-chain); 10% default.
+  // Set on the escrow at creation so workers can choose by protection level.
+  const [killFeeBps, setKillFeeBps] = useState<number>(1000)
+  // The active escrow's actual on-chain kill fee. May differ from the selector
+  // (which only applies to escrows created here). Drives the refund preview.
+  const [escrowKillFeeBps, setEscrowKillFeeBps] = useState<number | null>(null)
+  // Timing windows (seconds), selectable per offer at creation.
+  const [checkInTimeout, setCheckInTimeout] = useState<number>(3600)  // 1h
+  const [checkOutTimeout, setCheckOutTimeout] = useState<number>(120) // 2m (demo)
+  // Dispute window (seconds); worker can self-claim if the arbiter stays silent.
+  const [disputeWindow, setDisputeWindow] = useState<number>(120) // 2m (demo)
 
   const updateRole = useCallback((role: Role, patch: Partial<RoleState>) => {
     setRoles((prev) => ({ ...prev, [role]: { ...prev[role], ...patch } }))
@@ -306,17 +319,19 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
       recruiter: emptyRoleState(),
       funder: emptyRoleState(),
       worker: emptyRoleState(),
+      supervisor: emptyRoleState(),
     })
     setTxs([])
-    setLastContractId(null)
-  }, [chain])
+    setEscrowAddr(cfg.escrow)
+    setEscrowUsdcBalance(null)
+  }, [chain, cfg.escrow])
 
   // Live balance refresher.
   //
   // Two paths feed it:
   //   1. A 4-second `setInterval` safety net — picks up changes caused by
   //      txs we *didn't* initiate from this tab (e.g. the worker's balance
-  //      bumping when another role calls `settle`).
+  //      bumping when another role calls `release`).
   //   2. Direct invocation from each tx handler's success path — catches
   //      our own txs within milliseconds of confirmation, so the UI feels
   //      truly live.
@@ -332,25 +347,68 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
 
   const refreshBalances = useCallback(async () => {
     const current = rolesRef.current
+    // Resolve USDC address from the escrow contract once per refresh
+    let usdcAddr: string | null = null
+    if (escrowAddr) {
+      try {
+        const escrowRo = new EthContract(escrowAddr, ['function USDC() view returns (address)'], rpc)
+        usdcAddr = await escrowRo.USDC()
+      } catch {
+        /* escrow not deployed yet, skip USDC */
+      }
+    }
+    const erc20Abi = ['function balanceOf(address) view returns (uint256)']
     await Promise.all(
       (Object.keys(current) as Role[]).map(async (role) => {
         const addr = current[role].session?.accountAddress
         if (!addr) return
         try {
           const bal = await rpc.getBalance(addr)
-          updateRole(role, { balance: bal })
+          const usdcBal = usdcAddr
+            ? await new EthContract(usdcAddr, erc20Abi, rpc).balanceOf(addr)
+            : null
+          updateRole(role, { balance: bal, usdcBalance: usdcBal })
         } catch {
           /* node not reachable, swallow */
         }
       }),
     )
-  }, [rpc, updateRole])
+    // Also refresh escrow contract's USDC balance
+    if (usdcAddr && escrowAddr) {
+      try {
+        const escBal = await new EthContract(usdcAddr, erc20Abi, rpc).balanceOf(escrowAddr)
+        setEscrowUsdcBalance(escBal)
+      } catch {
+        /* swallow */
+      }
+    }
+  }, [rpc, updateRole, escrowAddr])
 
   useEffect(() => {
     void refreshBalances()
     const t = setInterval(() => void refreshBalances(), 4000)
     return () => clearInterval(t)
   }, [refreshBalances])
+
+  // Read the active escrow's real killFeeBps whenever the target escrow changes,
+  // so the refund preview matches the on-chain offer (the selector above only
+  // sets the fee for escrows you create from this tab).
+  useEffect(() => {
+    if (!escrowAddr) {
+      setEscrowKillFeeBps(null)
+      return
+    }
+    let cancelled = false
+    const ro = new EthContract(
+      escrowAddr,
+      ['function policy() view returns (tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow))'],
+      rpc,
+    )
+    ro.policy()
+      .then((p) => { if (!cancelled) setEscrowKillFeeBps(Number(p.killFeeBps)) })
+      .catch(() => { if (!cancelled) setEscrowKillFeeBps(null) })
+    return () => { cancelled = true }
+  }, [escrowAddr, rpc])
 
   // ── Sign-in flow ────────────────────────────────────────────────────
   const signIn = useCallback(
@@ -362,7 +420,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
         scope: 'capacitor-minimal',
         rpcUrl: cfg.rpcUrl,
         chainId: cfg.chainId,
-        contracts: { receiver: cfg.receiver, escrow: cfg.escrow },
+        contracts: { nullifierRegistry: cfg.receiver, escrow: cfg.escrow },
         mockUserId: meta.mockUserId,
         adminPrivateKey: cfg.adminPrivateKey,
         prefundWei: meta.prefundWei,
@@ -371,7 +429,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
       try {
         const session = await provider.signIn({})
         const pk = await deriveDeterministicPk(meta.mockUserId)
-        const wallet = new ZkWallet(pk, rpc)
+        const wallet = new EthersWallet(pk, rpc)
         updateRole(role, { session, wallet, signing: false })
         tx.success()
       } catch (err) {
@@ -385,185 +443,300 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
 
   // ── Escrow actions ───────────────────────────────────────────────────
   //
-  // All flows go through `CofferdamSpotEscrowClient` from @cofferdam/sdk.
-  // The client owns: ABI, event decoding, contract-id extraction, and the
-  // status enum. We just wire it to each role's signing wallet and surface
-  // the tx hash to the activity log via the `onSent` hook.
+  // Realistic spot-escrow hiring flow (witness mode):
+  //   0. HR (recruiter) creates a new spot escrow via the EscrowFactory (CREATE2)
+  //   1. Finance (funder) approves USDC spending for the escrow contract
+  //   2. Finance (funder) funds the escrow (locks USDC)
+  //   3. HR (recruiter) awards the selected worker after candidate review
+  //      (after funding, before check-in — in real life these are ~simultaneous)
+  //   4. HR (recruiter) assigns the on-site supervisor as witness via setWitness
+  //   5. Supervisor (witness) checks in the worker — attests they showed up
+  //   6. Supervisor (witness) checks out the worker — attests work done → auto-release
+  //   7. Exit paths (worker-protective):
+  //      - refund: Finance cancels before check-in → awarded worker gets a kill
+  //        fee (killFeeBps), remainder back to Finance
+  //      - reclaimNoShow: worker never checked in by deadline → Finance reclaims all
+  //      - claimAfterCheckoutTimeout: worker checked in but the company witness
+  //        never checked out → funds release to the WORKER
+  //      - raiseDispute / resolveDispute: either party escalates to the neutral
+  //        arbiter, who splits the funds
+  //
+  // HR is the initial witness at deploy time (fallback for remote jobs).
+  // HR can reassign to an on-site supervisor via setWitness at any time.
+  //
+  // Step 2 (fund) requires the USDC allowance from step 1. Step 3 (award)
+  // requires the escrow to be funded and must precede check-in, so funds can
+  // never go active without a selected worker.
   const escrowFor = useCallback(
-    (wallet: ZkWallet) =>
-      new CofferdamSpotEscrowClient({ address: cfg.escrow, signer: wallet }),
-    [cfg.escrow],
+    (wallet: EthersWallet) =>
+      new CofferdamSpotEscrowClient({ address: escrowAddr, signer: wallet }),
+    [escrowAddr],
   )
 
-  const postSelfFunded = useCallback(async () => {
+  // Neutral arbiter wallet (platform / Cofferdam). In the demo this is the
+  // admin key — the same wallet set as `arbiter` in the deployed escrow policy
+  // — so it can call resolveDispute.
+  const arbiterWallet = useMemo(
+    () => (cfg.adminPrivateKey ? new EthersWallet(cfg.adminPrivateKey, rpc) : null),
+    [cfg.adminPrivateKey, rpc],
+  )
+
+  // ── Factory: create a new spot escrow via CREATE2 ─────────────────────
+  //
+  // HR (recruiter) creates the escrow through the EscrowFactory. The factory
+  // enforces access control — the deployer is auto-authorized. The salt is
+  // derived from the recruiter + worker IDs so the address is deterministic
+  // and reproducible. After creation, escrowAddr is updated so all subsequent
+  // actions (fund, setWitness, checkIn, checkOut) target the new escrow.
+  const createEscrow = useCallback(async () => {
     const wallet = roles.recruiter.wallet
+    if (!wallet || !cfg.factoryAddress) return
+    const factory = new CofferdamEscrowFactoryClient({
+      address: cfg.factoryAddress,
+      signer: wallet,
+    })
+    const funderAddr = roles.funder.session?.accountAddress
+    const workerAddr = roles.worker.session?.accountAddress
+    const recruiterAddr = roles.recruiter.session?.accountAddress
+    if (!funderAddr || !workerAddr || !recruiterAddr) return
+
+    // Deterministic salt from role IDs + timestamp — hashed to proper bytes32
+    const salt = ethersId(`${cfg.recruiterId}:${cfg.workerId}:${Date.now()}`)
+
+    const policy = {
+      funder: funderAddr,
+      recruiter: recruiterAddr,
+      workerNullifier: hexlify(randomBytes(32)) as `0x${string}`,
+      checkInTimeout,
+      checkOutTimeout,
+      witness: recruiterAddr, // HR is initial witness (fallback for remote)
+      arbiter: arbiterWallet?.address ?? recruiterAddr, // neutral platform resolver
+      killFeeBps, // funder-cancellation fee (5%-25%), default 10% — set per offer
+      amount: cfg.amountUsdc, // agreed pay — fund() must deposit exactly this
+      termsHash: ethersId('cofferdam-spot-demo-terms-v1'), // pointer to off-chain agreed terms
+      jobStartTime: 0, // effective at creation (no scheduled start)
+      disputeWindow, // worker can claim if the arbiter stays silent
+    }
+
+    const tx = newTx(
+      setTxs,
+      `🏭 createSpotEscrow (via factory, CREATE2)`,
+      cfg.explorerBase,
+    )
+    try {
+      const result = await factory.createSpotEscrow(policy, salt, {
+        onSent: (h) => tx.setHash(h),
+      })
+      setEscrowAddr(result.escrowAddress)
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.recruiter.wallet, roles.funder.session?.accountAddress, roles.worker.session?.accountAddress, roles.recruiter.session?.accountAddress, arbiterWallet, killFeeBps, checkInTimeout, checkOutTimeout, disputeWindow, cfg.amountUsdc, cfg.factoryAddress, cfg.recruiterId, cfg.workerId, cfg.explorerBase, refreshBalances])
+
+  const approveUSDC = useCallback(async () => {
+    const wallet = roles.funder.wallet
     if (!wallet) return
     const escrow = escrowFor(wallet)
-    const termsHash = CofferdamSpotEscrowClient.hashTerms(`self-${Date.now()}`)
     const tx = newTx(
       setTxs,
-      `🧾 postContract (self-funded, ${fmtEth(cfg.amountWei)})`,
+      `✅ approveUSDC (${fmtUsdc(cfg.amountUsdc)})`,
       cfg.explorerBase,
     )
     try {
-      const { contractId } = await escrow.postContract(termsHash, cfg.amountWei, {
+      await escrow.approveUSDC(cfg.amountUsdc, {
         onSent: (h) => tx.setHash(h),
       })
-      setLastContractId(contractId)
-      tx.successWithContract(contractId)
-      void refreshBalances()
+      tx.success()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, escrowFor, cfg.amountWei, cfg.explorerBase, refreshBalances])
-
-  const postIntent = useCallback(async () => {
-    const wallet = roles.recruiter.wallet
-    if (!wallet || !designatedFunderAddress) return
-    const escrow = escrowFor(wallet)
-    const termsHash = CofferdamSpotEscrowClient.hashTerms(`intent-${Date.now()}`)
-    const isOpenFunding = designatedFunderAddress === OPEN_FUNDING
-    const tx = newTx(
-      setTxs,
-      isOpenFunding
-        ? `🧾 postContractIntent (${fmtEth(cfg.amountWei)} → open funding)`
-        : `🧾 postContractIntent (${fmtEth(cfg.amountWei)} → ${shortAddr(designatedFunderAddress)})`,
-      cfg.explorerBase,
-    )
-    try {
-      const { contractId } = await escrow.postContractIntent(
-        termsHash,
-        cfg.amountWei,
-        designatedFunderAddress,
-        { onSent: (h) => tx.setHash(h) },
-      )
-      setLastContractId(contractId)
-      tx.successWithContract(contractId)
-      void refreshBalances()
-    } catch (err) {
-      tx.error(errMsg(err))
-    }
-  }, [
-    roles.recruiter.wallet,
-    designatedFunderAddress,
-    escrowFor,
-    cfg.amountWei,
-    cfg.explorerBase,
-    refreshBalances,
-  ])
-
-  const fundContract = useCallback(async () => {
-    const wallet = roles.funder.wallet
-    if (!wallet || lastContractId == null) return
-    const escrow = escrowFor(wallet)
-    const tx = newTx(
-      setTxs,
-      `💸 fundContract #${lastContractId} (${fmtEth(cfg.amountWei)})`,
-      cfg.explorerBase,
-    )
-    try {
-      await escrow.fundContract(lastContractId, cfg.amountWei, {
-        onSent: (h) => tx.setHash(h),
-      })
-      tx.successWithContract(lastContractId)
-      void refreshBalances()
-      // Bump the funder up the recent list so re-running with a fresh
-      // recruiter ID surfaces them first.
-      const addr = roles.funder.session?.accountAddress
-      if (addr) funderPicker.recordUsage(addr, 'Sign-in: Finance')
-    } catch (err) {
-      tx.error(errMsg(err))
-    }
-  }, [
-    roles.funder.wallet,
-    roles.funder.session?.accountAddress,
-    lastContractId,
-    escrowFor,
-    cfg.amountWei,
-    cfg.explorerBase,
-    funderPicker,
-    refreshBalances,
-  ])
+  }, [roles.funder.wallet, escrowFor, cfg.amountUsdc, cfg.explorerBase])
 
   const awardWorker = useCallback(async () => {
     const wallet = roles.recruiter.wallet
     const workerAddr = roles.worker.session?.accountAddress
-    if (!wallet || !workerAddr || lastContractId == null) return
+    if (!wallet || !workerAddr) return
     const escrow = escrowFor(wallet)
     const tx = newTx(
       setTxs,
-      `🏷  awardContract #${lastContractId} → ${shortAddr(workerAddr)}`,
+      `🎯 awardWorker (${shortAddr(workerAddr)}) — HR selects candidate`,
       cfg.explorerBase,
     )
     try {
-      await escrow.awardContract(lastContractId, workerAddr, {
+      await escrow.awardWorker(workerAddr, {
         onSent: (h) => tx.setHash(h),
       })
-      tx.successWithContract(lastContractId)
+      tx.success()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.recruiter.wallet, roles.worker.session?.accountAddress, escrowFor, cfg.explorerBase])
+
+  const fund = useCallback(async () => {
+    const wallet = roles.funder.wallet
+    if (!wallet) return
+    const escrow = escrowFor(wallet)
+    const tx = newTx(
+      setTxs,
+      `💸 fund (${fmtUsdc(cfg.amountUsdc)})`,
+      cfg.explorerBase,
+    )
+    try {
+      await escrow.fund(cfg.amountUsdc, {
+        onSent: (h) => tx.setHash(h),
+      })
+      tx.success()
       void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [
-    roles.recruiter.wallet,
-    roles.worker.session?.accountAddress,
-    lastContractId,
-    escrowFor,
-    cfg.explorerBase,
-    refreshBalances,
-  ])
+  }, [roles.funder.wallet, escrowFor, cfg.amountUsdc, cfg.explorerBase, refreshBalances])
+
+  const setWitness = useCallback(async () => {
+    const wallet = roles.recruiter.wallet
+    const supervisorAddr = roles.supervisor.session?.accountAddress
+    if (!wallet || !supervisorAddr) return
+    const escrow = escrowFor(wallet)
+    const tx = newTx(
+      setTxs,
+      `🔧 setWitness (${shortAddr(supervisorAddr)}) — HR → Supervisor`,
+      cfg.explorerBase,
+    )
+    try {
+      await escrow.setWitness(supervisorAddr, { onSent: (h) => tx.setHash(h) })
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.recruiter.wallet, roles.supervisor.session?.accountAddress, escrowFor, cfg.explorerBase, refreshBalances])
 
   const checkIn = useCallback(async () => {
-    const wallet = roles.worker.wallet
-    if (!wallet || lastContractId == null) return
+    const wallet = roles.supervisor.wallet ?? roles.recruiter.wallet
+    const workerAddr = roles.worker.session?.accountAddress
+    if (!wallet || !workerAddr) return
     const escrow = escrowFor(wallet)
-    const tx = newTx(setTxs, `🕒 checkIn #${lastContractId}`, cfg.explorerBase)
+    const witnessLabel = wallet === roles.recruiter.wallet ? 'HR (fallback)' : 'Supervisor'
+    const tx = newTx(
+      setTxs,
+      `🕒 checkIn (${shortAddr(workerAddr)}) — witness: ${witnessLabel}`,
+      cfg.explorerBase,
+    )
     try {
-      await escrow.checkIn(lastContractId, { onSent: (h) => tx.setHash(h) })
-      tx.successWithContract(lastContractId)
+      await escrow.checkIn(workerAddr, { onSent: (h) => tx.setHash(h) })
+      tx.success()
       void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase, refreshBalances])
+  }, [roles.supervisor.wallet, roles.recruiter.wallet, roles.worker.session?.accountAddress, escrowFor, cfg.explorerBase, refreshBalances])
 
   const checkOut = useCallback(async () => {
-    const wallet = roles.worker.wallet
-    if (!wallet || lastContractId == null) return
+    const wallet = roles.supervisor.wallet ?? roles.recruiter.wallet
+    if (!wallet) return
     const escrow = escrowFor(wallet)
-    const tx = newTx(setTxs, `🕔 checkOut #${lastContractId}`, cfg.explorerBase)
+    const witnessLabel = wallet === roles.recruiter.wallet ? 'HR (fallback)' : 'Supervisor'
+    const tx = newTx(setTxs, `✅ checkOut — witness: ${witnessLabel} (auto-releases USDC)`, cfg.explorerBase)
     try {
-      await escrow.checkOut(lastContractId, { onSent: (h) => tx.setHash(h) })
-      tx.successWithContract(lastContractId)
+      await escrow.checkOut({ onSent: (h) => tx.setHash(h) })
+      tx.success()
       void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.worker.wallet, lastContractId, escrowFor, cfg.explorerBase, refreshBalances])
+  }, [roles.supervisor.wallet, roles.recruiter.wallet, escrowFor, cfg.explorerBase, refreshBalances])
 
-  const settle = useCallback(async () => {
-    // Any signed-in wallet can call settle. We use the recruiter for parity
-    // with the integration test; in production the Cofferdam paymaster bot does.
-    const wallet = roles.recruiter.wallet ?? roles.funder.wallet ?? roles.worker.wallet
-    if (!wallet || lastContractId == null) return
+  // Refund preview uses the active escrow's real fee; fall back to the selector
+  // (the level a newly created offer would use) until the on-chain read lands.
+  const activeKillFeeBps = escrowKillFeeBps ?? killFeeBps
+  const killFeeUsdc = (cfg.amountUsdc * BigInt(activeKillFeeBps)) / 10_000n
+
+  const refund = useCallback(async () => {
+    const wallet = roles.funder.wallet
+    if (!wallet) return
     const escrow = escrowFor(wallet)
-    const tx = newTx(setTxs, `✅ settle #${lastContractId}`, cfg.explorerBase)
+    const tx = newTx(setTxs, `↩️ refund (kill fee ${fmtUsdc(killFeeUsdc)} → worker, rest → funder)`, cfg.explorerBase)
     try {
-      await escrow.settle(lastContractId, { onSent: (h) => tx.setHash(h) })
-      tx.successWithContract(lastContractId)
+      await escrow.refund({ onSent: (h) => tx.setHash(h) })
+      tx.success()
       void refreshBalances()
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [
-    roles.recruiter.wallet,
-    roles.funder.wallet,
-    roles.worker.wallet,
-    lastContractId,
-    escrowFor,
-    cfg.explorerBase,
-    refreshBalances,
-  ])
+  }, [roles.funder.wallet, escrowFor, killFeeUsdc, cfg.explorerBase, refreshBalances])
+
+  const reclaimNoShow = useCallback(async () => {
+    const wallet = roles.funder.wallet
+    if (!wallet) return
+    const escrow = escrowFor(wallet)
+    const tx = newTx(setTxs, `🚫 reclaimNoShow (${fmtUsdc(cfg.amountUsdc)} → funder, worker no-show)`, cfg.explorerBase)
+    try {
+      await escrow.reclaimNoShow({ onSent: (h) => tx.setHash(h) })
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.funder.wallet, escrowFor, cfg.amountUsdc, cfg.explorerBase, refreshBalances])
+
+  const claimTimeout = useCallback(async () => {
+    const wallet = roles.worker.wallet ?? roles.funder.wallet
+    if (!wallet) return
+    const escrow = escrowFor(wallet)
+    const tx = newTx(setTxs, `⏰ claimAfterCheckoutTimeout (${fmtUsdc(cfg.amountUsdc)} → worker)`, cfg.explorerBase)
+    try {
+      await escrow.claimAfterCheckoutTimeout({ onSent: (h) => tx.setHash(h) })
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.worker.wallet, roles.funder.wallet, escrowFor, cfg.amountUsdc, cfg.explorerBase, refreshBalances])
+
+  const raiseDispute = useCallback(async () => {
+    const wallet = roles.worker.wallet
+    if (!wallet) return
+    const escrow = escrowFor(wallet)
+    const reason = ethersId(`dispute:${Date.now()}`)
+    const tx = newTx(setTxs, `⚖️ raiseDispute (worker escalates to arbiter)`, cfg.explorerBase)
+    try {
+      await escrow.raiseDispute(reason, { onSent: (h) => tx.setHash(h) })
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.worker.wallet, escrowFor, cfg.explorerBase, refreshBalances])
+
+  const resolveDispute = useCallback(async () => {
+    if (!arbiterWallet) return
+    const escrow = escrowFor(arbiterWallet)
+    const workerAmount = cfg.amountUsdc / 2n
+    const tx = newTx(setTxs, `🧑‍⚖️ resolveDispute (arbiter: ${fmtUsdc(workerAmount)} → worker, rest → funder)`, cfg.explorerBase)
+    try {
+      await escrow.resolveDispute(workerAmount, { onSent: (h) => tx.setHash(h) })
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [arbiterWallet, escrowFor, cfg.amountUsdc, cfg.explorerBase, refreshBalances])
+
+  const claimDisputeTimeout = useCallback(async () => {
+    const wallet = roles.worker.wallet ?? roles.funder.wallet
+    if (!wallet) return
+    const escrow = escrowFor(wallet)
+    const tx = newTx(setTxs, `⏰ claimAfterDisputeTimeout (${fmtUsdc(cfg.amountUsdc)} → worker, arbiter silent)`, cfg.explorerBase)
+    try {
+      await escrow.claimAfterDisputeTimeout({ onSent: (h) => tx.setHash(h) })
+      tx.success()
+      void refreshBalances()
+    } catch (err) {
+      tx.error(errMsg(err))
+    }
+  }, [roles.worker.wallet, roles.funder.wallet, escrowFor, cfg.amountUsdc, cfg.explorerBase, refreshBalances])
 
   // ── Render ─────────────────────────────────────────────────────────────
   const title = chain === 'testnet' ? 'Cofferdam Sepolia Demo' : 'Cofferdam Local-Chain Demo'
@@ -575,7 +748,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
           <p className="lead">
             Missing <code>VITE_LOCAL_RECEIVER_ADDRESS</code> /{' '}
             <code>VITE_LOCAL_ESCROW_ADDRESS</code> in <code>.env.local</code>.
-            Run <code>yarn deploy:v1-zksync:local</code> in the contracts repo
+            Run <code>yarn deploy:local</code> in the base-contracts repo
             first, then paste the addresses it printed into{' '}
             <code>examples/capacitor-minimal/.env.local</code> (see{' '}
             <code>.env.example</code>) and restart <code>yarn dev:local-chain</code>.
@@ -606,15 +779,15 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
 
   const lead =
     chain === 'testnet'
-      ? `Three roles, one ZKSync Sepolia deployment. Sign each role in, then drive the corporate flow on-chain. Demo amounts are scaled 100× smaller (${fmtEth(cfg.amountWei)} per job) so the admin's faucet ETH lasts.`
-      : 'Three roles, one anvil-zksync node. Sign each role in, then drive the corporate flow on-chain. Watch the activity log + your node terminal side-by-side.'
+      ? `Four roles, one Base Sepolia deployment. Finance funds, HR assigns supervisor as witness, supervisor checks worker in/out — checkout auto-releases USDC. Demo amounts scaled 100× smaller (${fmtUsdc(cfg.amountUsdc)} per job).`
+      : 'Four roles, one base-anvil node. Finance funds the escrow, HR assigns an on-site supervisor as witness, supervisor checks worker in and out — checkout auto-releases USDC to the worker. HR can reassign the supervisor at any time (rotation fallback). Watch the activity log + your node terminal side-by-side.'
 
   return (
     <main className="container container-wide">
       <h1>
         {title}
         {chain === 'testnet' && (
-          <span className="chain-badge" title="ZKSync Era Sepolia (chainId 300)">
+          <span className="chain-badge" title="Base Sepolia (chainId 84532)">
             {' '}testnet
           </span>
         )}
@@ -639,18 +812,34 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
             <code>{shortAddr(cfg.receiver)}</code>
           )}
           {' · '}
-          <strong>Escrow:</strong>{' '}
+          <strong>Factory:</strong>{' '}
           {cfg.explorerBase ? (
             <a
-              href={`${cfg.explorerBase}/address/${cfg.escrow}`}
+              href={`${cfg.explorerBase}/address/${cfg.factoryAddress}`}
               target="_blank"
               rel="noreferrer"
             >
-              <code>{shortAddr(cfg.escrow)}</code>
+              <code>{shortAddr(cfg.factoryAddress)}</code>
             </a>
           ) : (
-            <code>{shortAddr(cfg.escrow)}</code>
+            <code>{shortAddr(cfg.factoryAddress)}</code>
           )}
+          {' · '}
+          <strong>Escrow:</strong>{' '}
+          {cfg.explorerBase ? (
+            <a
+              href={`${cfg.explorerBase}/address/${escrowAddr}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <code>{shortAddr(escrowAddr)}</code>
+            </a>
+          ) : (
+            <code>{shortAddr(escrowAddr)}</code>
+          )}
+          {' · '}
+          <strong>Escrow USDC:</strong>{' '}
+          <code>{fmtUsdc(escrowUsdcBalance)}</code>
         </div>
       </div>
 
@@ -666,71 +855,250 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
         ))}
       </div>
 
-      <FunderPickerPanel
-        picker={funderPicker}
-        chainExplorerBase={cfg.explorerBase}
-        signedInFunder={roles.funder.session?.accountAddress ?? null}
-      />
+      <h2 className="section-h">Offer terms</h2>
+      <div className="funder-picker">
+        <span className="funder-label">
+          Kill fee — paid to the worker if the company cancels before check-in (range 5–25%)
+        </span>
+        <div className="funder-candidates">
+          {[500, 1000, 1500, 2500].map((bps) => (
+            <button
+              key={bps}
+              className={`funder-chip ${killFeeBps === bps ? 'funder-chip-on' : ''}`}
+              onClick={() => setKillFeeBps(bps)}
+              title={`Set this offer's kill fee to ${bps / 100}%`}
+            >
+              {bps / 100}%{bps === 1000 ? ' · default' : ''}
+            </button>
+          ))}
+        </div>
+        <p className="funder-hint">
+          Set on the offer at creation (applies to escrows you create here). Workers pick offers
+          by protection level, so companies that commit to fairer terms attract more reliable
+          workers and get more fulfilments — competition that lifts the whole market. A new offer
+          at this level pays{' '}
+          <strong>{fmtUsdc((cfg.amountUsdc * BigInt(killFeeBps)) / 10_000n)}</strong> on{' '}
+          {fmtUsdc(cfg.amountUsdc)} if cancelled before check-in.
+          {escrowKillFeeBps !== null && (
+            <>
+              {' · '}Active escrow on-chain: <strong>{escrowKillFeeBps / 100}%</strong>{' '}
+              ({fmtUsdc((cfg.amountUsdc * BigInt(escrowKillFeeBps)) / 10_000n)}).
+            </>
+          )}
+        </p>
+        <span className="funder-label">
+          Check-in window — how long the worker has to check in before Finance can reclaim a no-show (Rule C)
+        </span>
+        <div className="funder-candidates">
+          {[
+            { s: 3600, label: '1h' },
+            { s: 21600, label: '6h' },
+            { s: 86400, label: '24h' },
+            { s: 259200, label: '3d' },
+          ].map(({ s, label }) => (
+            <button
+              key={s}
+              className={`funder-chip ${checkInTimeout === s ? 'funder-chip-on' : ''}`}
+              onClick={() => setCheckInTimeout(s)}
+              title={`Worker must check in within ${label} of creation`}
+            >
+              {label}{s === 3600 ? ' · default' : ''}
+            </button>
+          ))}
+        </div>
+        <span className="funder-label">
+          Check-out timeout — after this, a checked-in worker can self-claim if the witness never checks out (Rule D)
+        </span>
+        <div className="funder-candidates">
+          {[
+            { s: 120, label: '2m (demo)' },
+            { s: 3600, label: '1h' },
+            { s: 28800, label: '8h' },
+            { s: 86400, label: '24h' },
+          ].map(({ s, label }) => (
+            <button
+              key={s}
+              className={`funder-chip ${checkOutTimeout === s ? 'funder-chip-on' : ''}`}
+              onClick={() => setCheckOutTimeout(s)}
+              title={`Worker can self-claim ${label} after check-in if not checked out`}
+            >
+              {label}{s === 120 ? ' · default' : ''}
+            </button>
+          ))}
+        </div>
+        <span className="funder-label">
+          Dispute window — after this, a worker in a dispute can self-claim if the arbiter never resolves (Rule G)
+        </span>
+        <div className="funder-candidates">
+          {[
+            { s: 0, label: 'off' },
+            { s: 120, label: '2m (demo)' },
+            { s: 86400, label: '24h' },
+            { s: 604800, label: '7d' },
+          ].map(({ s, label }) => (
+            <button
+              key={s}
+              className={`funder-chip ${disputeWindow === s ? 'funder-chip-on' : ''}`}
+              onClick={() => setDisputeWindow(s)}
+              title={s === 0 ? 'No dispute deadline (arbiter must resolve)' : `Worker can self-claim ${label} after raising a dispute if unresolved`}
+            >
+              {label}{s === 120 ? ' · default' : ''}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      <h2 className="section-h">Actions</h2>
-      <div className="actions">
-        <button
-          className="action"
-          onClick={postSelfFunded}
-          disabled={!roles.recruiter.wallet}
-          title="Recruiter posts a self-funded contract (α-2 path). 1 tx."
-        >
-          1️⃣ Post self-funded job
-        </button>
-        <button
-          className="action"
-          onClick={postIntent}
-          disabled={!roles.recruiter.wallet || !designatedFunderAddress}
-          title="Recruiter drafts a contract designating the picked funder. 1 tx, no funds yet."
-        >
-          1️⃣ Post intent →{' '}
-          {designatedFunderAddress === OPEN_FUNDING
-            ? 'open'
-            : shortAddr(designatedFunderAddress)}
-        </button>
-        <button
-          className="action"
-          onClick={fundContract}
-          disabled={!roles.funder.wallet || lastContractId == null}
-          title="Finance funds the latest draft. 1 tx, transfers the locked amount into escrow."
-        >
-          2️⃣ Fund contract #{lastContractId?.toString() ?? '—'}
-        </button>
-        <button
-          className="action"
-          onClick={awardWorker}
-          disabled={!roles.recruiter.wallet || !roles.worker.session || lastContractId == null}
-          title="Recruiter awards the worker for the latest contract. 1 tx."
-        >
-          3️⃣ Award worker
-        </button>
-        <button
-          className="action"
-          onClick={checkIn}
-          disabled={!roles.worker.wallet || lastContractId == null}
-        >
-          4️⃣ Check in
-        </button>
-        <button
-          className="action"
-          onClick={checkOut}
-          disabled={!roles.worker.wallet || lastContractId == null}
-        >
-          5️⃣ Check out
-        </button>
-        <button
-          className="action action-settle"
-          onClick={settle}
-          disabled={lastContractId == null || (!roles.recruiter.wallet && !roles.funder.wallet && !roles.worker.wallet)}
-          title="Settle pays the worker. Any signed-in role can call it; we use the recruiter."
-        >
-          6️⃣ Settle (pay worker)
-        </button>
+      <h2 className="section-h">Escrow lifecycle</h2>
+      <div className="flow">
+        {/* Phase 1 — Created: setup & funding */}
+        <div className="flow-phase">
+          <div className="flow-phase-head">
+            <span className="flow-state">Created</span> Setup &amp; funding
+          </div>
+          <div className="actions">
+            <button
+              className="action"
+              onClick={createEscrow}
+              disabled={!roles.recruiter.wallet || !cfg.factoryAddress || !roles.funder.session || !roles.worker.session}
+              title="HR creates a new spot escrow via the EscrowFactory (CREATE2). Requires all roles signed in."
+            >
+              0️⃣ Create escrow (factory, CREATE2)
+            </button>
+            <button
+              className="action"
+              onClick={approveUSDC}
+              disabled={!roles.funder.wallet}
+              title="Finance approves USDC spending for the escrow contract. Separate from funding so the chain can sync."
+            >
+              1️⃣ Approve USDC ({fmtUsdc(cfg.amountUsdc)})
+            </button>
+            <button
+              className="action"
+              onClick={fund}
+              disabled={!roles.funder.wallet}
+              title="Finance funds the escrow (locks USDC). Requires USDC approval. The worker is awarded right after funding."
+            >
+              2️⃣ Fund escrow ({fmtUsdc(cfg.amountUsdc)})
+            </button>
+          </div>
+        </div>
+
+        {/* Phase 2 — Funded: award & staffing */}
+        <div className="flow-phase">
+          <div className="flow-phase-head">
+            <span className="flow-state">Funded</span> Award &amp; staffing
+          </div>
+          <div className="actions">
+            <button
+              className="action"
+              onClick={awardWorker}
+              disabled={!roles.recruiter.wallet || !roles.worker.session}
+              title="HR awards the selected worker after candidate review. Done after funding, before check-in."
+            >
+              3️⃣ Award worker (HR → select candidate)
+            </button>
+            <button
+              className="action"
+              onClick={setWitness}
+              disabled={!roles.recruiter.wallet || !roles.supervisor.session}
+              title="HR assigns the on-site supervisor as witness. Supervisor can then check in/out the worker."
+            >
+              4️⃣ Assign supervisor (HR → witness)
+            </button>
+          </div>
+          <div className="flow-branch">
+            <div className="flow-branch-head">Exit paths — before check-in</div>
+            <div className="actions">
+              <button
+                className="action action-cancel"
+                onClick={refund}
+                disabled={!roles.funder.wallet}
+                title="Finance cancels before check-in. The awarded worker is paid the offer's kill fee (5–25%, default 10%) for declining other offers; remainder returns to Finance."
+              >
+                ↩️ Refund + kill fee (worker compensated)
+              </button>
+              <button
+                className="action action-cancel"
+                onClick={reclaimNoShow}
+                disabled={!roles.funder.wallet}
+                title="Worker never checked in by the deadline (no-show). Finance reclaims the full amount, no kill fee."
+              >
+                🚫 Reclaim no-show (full → Finance)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Phase 3 — Active: on-site work */}
+        <div className="flow-phase">
+          <div className="flow-phase-head">
+            <span className="flow-state">Active</span> On-site work
+          </div>
+          <div className="actions">
+            <button
+              className="action"
+              onClick={checkIn}
+              disabled={(!roles.supervisor.wallet && !roles.recruiter.wallet) || !roles.worker.session}
+              title="Witness (supervisor, or HR as fallback) checks in the worker — attests they showed up."
+            >
+              5️⃣ Check in worker (witness)
+            </button>
+            <button
+              className="action action-settle"
+              onClick={checkOut}
+              disabled={!roles.supervisor.wallet && !roles.recruiter.wallet}
+              title="Witness (supervisor, or HR as fallback) checks out the worker — attests work done. Auto-releases USDC to worker."
+            >
+              6️⃣ Check out + auto-release (witness)
+            </button>
+          </div>
+          <div className="flow-branch">
+            <div className="flow-branch-head">Exit path — after check-in</div>
+            <div className="actions">
+              <button
+                className="action action-settle"
+                onClick={claimTimeout}
+                disabled={!roles.worker.wallet}
+                title="Worker checked in but the company witness never checked them out. After the checkout timeout the worker claims the funds — inaction risk sits with the company."
+              >
+                ⏰ Worker claim (witness no-checkout)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Phase 4 — Disputed: arbitration (reachable from Funded or Active) */}
+        <div className="flow-phase">
+          <div className="flow-phase-head">
+            <span className="flow-state">Disputed</span> Disputes &amp; arbitration
+          </div>
+          <div className="actions">
+            <button
+              className="action action-cancel"
+              onClick={raiseDispute}
+              disabled={!roles.worker.wallet}
+              title="Worker (or any party) escalates to the neutral arbiter — e.g. checked in but the witness won't check out, or disagreement on completion. Moves escrow to Disputed."
+            >
+              ⚖️ Raise dispute (worker / funder)
+            </button>
+            <button
+              className="action action-settle"
+              onClick={resolveDispute}
+              disabled={!arbiterWallet}
+              title="Neutral arbiter resolves the dispute, splitting funds between worker and funder based on evidence (demo: 50/50)."
+            >
+              🧑‍⚖️ Resolve dispute (arbiter)
+            </button>
+            <button
+              className="action action-settle"
+              onClick={claimDisputeTimeout}
+              disabled={!roles.worker.wallet}
+              title="If the arbiter never resolves within the dispute window, the worker claims the full amount — arbiter-silence risk sits with the system, not the worker."
+            >
+              ⏰ Worker claim (arbiter silent)
+            </button>
+          </div>
+        </div>
       </div>
 
       <h2 className="section-h">Activity</h2>
@@ -744,9 +1112,6 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
                 {t.status === 'pending' ? '⏳' : t.status === 'success' ? '✓' : '✗'}
               </span>
               <span className="activity-label">{t.label}</span>
-              {t.contractId != null && (
-                <span className="activity-cid">contract #{t.contractId.toString()}</span>
-              )}
               {t.hash &&
                 (t.explorerBase ? (
                   <a
@@ -804,6 +1169,10 @@ function RolePanel({ meta, state, onSignIn }: RolePanelProps) {
             <code>{fmtEth(state.balance)}</code>
           </div>
           <div className="role-line">
+            <span>USDC</span>
+            <code>{fmtUsdc(state.usdcBalance)}</code>
+          </div>
+          <div className="role-line">
             <span>pseudonym</span>
             <code>{state.session!.appPseudonym.slice(0, 18)}…</code>
           </div>
@@ -819,137 +1188,7 @@ function RolePanel({ meta, state, onSignIn }: RolePanelProps) {
 }
 
 function emptyRoleState(): RoleState {
-  return { session: null, wallet: null, balance: null, signing: false, error: null }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Funder picker UI
-// ────────────────────────────────────────────────────────────────────────────
-//
-// Small inline UI exercising `useFunderPicker` from @cofferdam/sdk-react.
-// Renders:
-//   - candidate chips (signed-in Finance role + recents)
-//   - a manual-paste input for ad-hoc addresses
-//   - an "open funding" toggle (sends address(0) to the contract)
-// The picker itself owns dedup/persistence; this component is just chrome.
-
-interface FunderPickerPanelProps {
-  picker: ReturnType<typeof useFunderPicker>
-  chainExplorerBase: string | null
-  signedInFunder: string | null
-}
-
-function FunderPickerPanel({
-  picker,
-  chainExplorerBase,
-  signedInFunder,
-}: FunderPickerPanelProps) {
-  const [manual, setManual] = useState('')
-  const selected = picker.selectedFunder
-  const isOpen = selected?.address === OPEN_FUNDING
-  const fallback = !selected && signedInFunder
-    ? { address: signedInFunder, label: 'Sign-in: Finance (default)' }
-    : null
-  const effective = selected ?? fallback
-
-  const tryManual = () => {
-    const trimmed = manual.trim()
-    if (!picker.isValidAddress(trimmed)) return
-    picker.selectFunderByAddress(trimmed, 'Manual entry')
-    setManual('')
-  }
-
-  return (
-    <div className="funder-picker">
-      <h2 className="section-h">Designated funder (corporate flow)</h2>
-      <p className="funder-hint">
-        Picked address is passed to <code>postContractIntent</code> as{' '}
-        <code>designatedFunder</code>. Choose <em>open funding</em> to allow any
-        Cofferdam-bound account to fund the draft.
-      </p>
-
-      <div className="funder-selected">
-        <strong>Selected:</strong>{' '}
-        {effective ? (
-          <>
-            {isOpen ? (
-              <code>OPEN_FUNDING (address(0))</code>
-            ) : chainExplorerBase ? (
-              <a
-                href={`${chainExplorerBase}/address/${effective.address}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <code>{shortAddr(effective.address)}</code>
-              </a>
-            ) : (
-              <code>{shortAddr(effective.address)}</code>
-            )}
-            {effective.label && <span className="funder-label"> · {effective.label}</span>}
-            {!selected && <span className="funder-label"> · (fallback)</span>}
-          </>
-        ) : (
-          <span className="funder-empty">— sign Finance in or paste an address —</span>
-        )}
-      </div>
-
-      <div className="funder-candidates">
-        {picker.candidates.map((c) => {
-          const active = selected?.address === c.address
-          return (
-            <button
-              key={c.address}
-              className={`funder-chip ${active ? 'funder-chip-on' : ''}`}
-              onClick={() => picker.selectFunder(c)}
-              title={c.address}
-            >
-              {c.label ?? shortAddr(c.address)}
-              {c.lastUsedAt && <span className="funder-recent"> · recent</span>}
-            </button>
-          )
-        })}
-        <button
-          className={`funder-chip funder-chip-open ${isOpen ? 'funder-chip-on' : ''}`}
-          onClick={() =>
-            picker.selectFunder({ address: OPEN_FUNDING, label: 'Open funding (any bound account)' })
-          }
-          title="address(0) — any Cofferdam-bound account can fund"
-        >
-          Open funding
-        </button>
-        {selected && (
-          <button
-            className="funder-chip funder-chip-clear"
-            onClick={() => picker.selectFunder(null)}
-            title="Fall back to the signed-in Finance role"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-
-      <div className="funder-manual">
-        <input
-          type="text"
-          placeholder="0x… manual address"
-          value={manual}
-          onChange={(e) => setManual(e.target.value)}
-          spellCheck={false}
-        />
-        <button
-          onClick={tryManual}
-          disabled={!picker.isValidAddress(manual.trim())}
-        >
-          Use address
-        </button>
-        {picker.recent.length > 0 && (
-          <button className="funder-clear-recent" onClick={picker.clearRecent}>
-            Clear recents ({picker.recent.length})
-          </button>
-        )}
-      </div>
-    </div>
-  )
+  return { session: null, wallet: null, balance: null, usdcBalance: null, signing: false, error: null }
 }
 
 function errMsg(e: unknown): string {
@@ -960,7 +1199,6 @@ function errMsg(e: unknown): string {
 interface TxHandle {
   setHash(hash: string): void
   success(): void
-  successWithContract(cid: bigint): void
   error(msg: string): void
 }
 
@@ -976,7 +1214,6 @@ function newTx(
   return {
     setHash: (hash) => patch({ hash }),
     success: () => patch({ status: 'success' }),
-    successWithContract: (cid) => patch({ status: 'success', contractId: cid }),
     error: (msg) => patch({ status: 'error', error: msg }),
   }
 }

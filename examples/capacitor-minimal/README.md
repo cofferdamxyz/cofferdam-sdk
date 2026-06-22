@@ -11,9 +11,9 @@ Two-mode end-to-end integration of [`@cofferdam/sdk-react`](../../packages/react
 
 The whole mock demo is **under 60 lines of TSX** ([`src/App.tsx`](./src/App.tsx) `MockDemo`).
 
-**`local-chain` mode** (α-2) — three-role interactive harness for the v1/zksync contracts. Demonstrates:
+**`local-chain` mode** (α-2) — three-role interactive harness for the Base contracts. Demonstrates:
 
-- `LocalChainProvider` signing three independent roles (recruiter / funder / worker) into the same anvil-zksync node
+- `LocalChainProvider` signing three independent roles (recruiter / funder / worker) into the same base-anvil node
 - The full corporate flow on-chain: `postContractIntent → fundContract → awardContract → checkIn → checkOut → settle`
 - Live activity log with tx hashes and status — watch it side-by-side with your node terminal
 
@@ -132,17 +132,17 @@ End-to-end interactive test: sign in three roles, drive the full corporate flow 
 
 ### Each session (4 terminals)
 
-**Terminal 1 — anvil-zksync node** (from `contracts/`):
+**Terminal 1 — base-anvil node** (from `base-contracts/`):
 ```bash
-yarn node:start
-# anvil-zksync is now listening on http://127.0.0.1:8011 (chain 260).
-# Leave it running. anvil-zksync's default output is terse — for a
+yarn anvil
+# anvil is now listening on http://127.0.0.1:8545 (chain 31337).
+# Leave it running. anvil's default output is terse — for a
 # decoded per-tx log, use Terminal 4 below.
 ```
 
-**Terminal 2 — deploy the v1/zksync contracts** (also from `contracts/`):
+**Terminal 2 — deploy the Base contracts** (also from `base-contracts/`):
 ```bash
-yarn deploy:v1-zksync:local
+yarn deploy:local
 # Prints:
 #   CofferdamReceiver deployed at 0xAbCd…
 #   CofferdamSpotEscrow   deployed at 0x1234…
@@ -162,7 +162,7 @@ yarn workspace @cofferdam/example-capacitor-minimal dev:local-chain
 # → http://localhost:5173
 ```
 
-**Terminal 4 — RPC tx tail** (decoded mirror of every Receiver/Escrow call). Optional but strongly recommended: it's the only way to actually see *what's happening* on chain in real time — anvil-zksync's stdout is too terse and the in-app activity log only captures escrow actions you fire from the buttons (it misses bind/pre-fund txs).
+**Terminal 4 — RPC tx tail** (decoded mirror of every Receiver/Escrow call). Optional but strongly recommended: it's the only way to actually see *what's happening* on chain in real time — anvil's stdout is too terse and the in-app activity log only captures escrow actions you fire from the buttons (it misses bind/pre-fund txs).
 ```bash
 yarn workspace @cofferdam/example-capacitor-minimal tail
 # Backfills the last 50 blocks, then tails new ones with a 10-second
@@ -196,22 +196,16 @@ If you'd rather test the α-2 self-funded path instead, click **1️⃣ Post sel
 
 The demo's deterministic-EOA derivation means the same `VITE_LOCAL_RECRUITER_ID=local-recruiter-1` produces the same address across runs. Two consequences:
 
-- **anvil-zksync was restarted (chain wiped)**: just hit the page again, sign in, everything works — the bind happens fresh.
-- **anvil-zksync is still up from a previous session**: the user is already bound, so the bind tx is skipped silently (the provider checks `isAccountBound` first). To get fresh users, bump the suffix in `.env.local` (`local-recruiter-2`, etc.) or restart the node.
+- **anvil was restarted (chain wiped)**: just hit the page again, sign in, everything works — the bind happens fresh.
+- **anvil is still up from a previous session**: the user is already bound, so the bind tx is skipped silently (the provider checks `isAccountBound` first). To get fresh users, bump the suffix in `.env.local` (`local-recruiter-2`, etc.) or restart the node.
 
-### Switching to ZKSync Sepolia (testnet)
+### Switching to Base Sepolia (testnet)
 
 Same UI + flow, pointed at a real public testnet. Useful for validating the flow against a public RPC, sharing the activity log with someone outside your machine, or testing internal-track Cofferdam mobile builds against a non-ephemeral chain.
 
-**Pre-deployed Sepolia addresses (α-2):**
+**Pre-deployed Sepolia addresses:**
 
-| Contract | Address | Explorer |
-|---|---|---|
-| `CofferdamReceiver` | `0x6b4D8580f72C1D3Eb9825aD6EE56c67ED0F1B9Bb` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0x6b4D8580f72C1D3Eb9825aD6EE56c67ED0F1B9Bb) |
-| `CofferdamSpotEscrow` | `0x2F22FE817dAA3Bff101f888C94F3ce0814880535` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0x2F22FE817dAA3Bff101f888C94F3ce0814880535) |
-| `Verifier_vc_and_disclose` (Phase 0) | `0xab4A3De2322d2c2e60531c71c158491a57C43910` | [sepolia.explorer.zksync.io](https://sepolia.explorer.zksync.io/address/0xab4A3De2322d2c2e60531c71c158491a57C43910) |
-
-Owner: `0x2c8A01e971d7C51B3B78f9F08c57c45584D96AB2` (deployer EOA; will hand off to LLC Safe for production). The Receiver/Escrow addresses are baked into the demo as defaults — you only need to set them in `.env.local` if you've redeployed.
+Deploy contracts to Base Sepolia using `yarn deploy:sepolia` in `base-contracts/`. The deployed addresses will be printed to the console and persisted to `base-contracts/deployments/sepolia.json`. Set them in `.env.local` under the `VITE_TESTNET_*` namespace.
 
 **Switch the demo to Sepolia:**
 
@@ -244,14 +238,14 @@ So the **first** run costs admin ~0.026 ETH; subsequent runs against the same ro
 yarn workspace @cofferdam/example-capacitor-minimal tail --backfill=0
 ```
 
-**Skip the local node entirely.** Terminal 1 (`yarn node:start`) and Terminal 2 (`deploy:v1-zksync:local`) are not needed for Sepolia mode — only the Vite dev server (`dev:sepolia-testnet`) and tail are required.
+**Skip the local node entirely.** Terminal 1 (`yarn anvil`) and Terminal 2 (`deploy:local`) are not needed for Sepolia mode — only the Vite dev server (`dev:sepolia-testnet`) and tail are required.
 
 ### Troubleshooting
 
 - **"Missing VITE_LOCAL_RECEIVER_ADDRESS"** → you haven't pasted the deploy output into `.env.local` (or didn't restart Vite after editing it).
-- **Sign-in error mentioning `network ... failed to detect`** → anvil-zksync isn't reachable. Check Terminal 1; the port (8011) may have been claimed by another process. Quick fix: `kill $(lsof -ti :8011)` and restart `yarn node:start`.
-- **Anvil falls back to a random port** (`Failed to bind to address 0.0.0.0:8011 ... Listening on 0.0.0.0:53426`) → another anvil-zksync from a previous session is still running. Same fix as above. Note that re-deploying the contracts is mandatory after this — the addresses in `.env.local` were on the killed node, not the new one.
+- **Sign-in error mentioning `network ... failed to detect`** → anvil isn't reachable. Check Terminal 1; the port (8545) may have been claimed by another process. Quick fix: `kill $(lsof -ti :8545)` and restart `yarn anvil`.
+- **Anvil falls back to a random port** (`Failed to bind to address 0.0.0.0:8545 ... Listening on 0.0.0.0:53426`) → another anvil from a previous session is still running. Same fix as above. Note that re-deploying the contracts is mandatory after this — the addresses in `.env.local` were on the killed node, not the new one.
 - **Tail prints nothing after clicking buttons** → the demo's RPC and the tail's RPC don't match, OR the deployed addresses in `.env.local` don't match what's actually on chain. Sanity check: `yarn workspace @cofferdam/example-capacitor-minimal tail --backfill=4000 --all` — if even with `--all` and a deep backfill you see nothing, your addresses are stale; redeploy and update `.env.local`.
-- **Tail decodes events but shows `selector=0x71f8…` for every call** → you're on an older `tail-chain.mjs` that used `getTransaction()` instead of raw `eth_getTransactionByHash`. `0x71f8…` is the ZKSync EIP-712 envelope, not real calldata. Pull latest.
+- **Tail decodes events but shows `selector=0x71f8…` for every call** → you're on an older `tail-chain.mjs` that used `getTransaction()` instead of raw `eth_getTransactionByHash`. Pull latest.
 - **Fund button stays disabled** → the funder must sign in *and* a draft must exist. The button label shows `Fund contract #—` until a draft id is set.
 - **Settle reverts with `NotCheckedOut`** → you skipped check-in / check-out. The buttons are in order top-to-bottom for a reason.

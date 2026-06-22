@@ -9,12 +9,12 @@
 // independently call `provider.getTransactionCount(admin, "pending")` to
 // pick a nonce.
 //
-// On a real public RPC (ZKSync Era Sepolia in particular) the pending-nonce
+// On a real public RPC (Base Sepolia in particular) the pending-nonce
 // view is eventually-consistent: a tx that just mined may not yet be
 // reflected when the *next* provider asks for `getTransactionCount`. The
 // second tx then signs a stale nonce and the sequencer rejects it with
 // "nonce too low. allowed nonce range: N - N+20, actual: N-1". On
-// anvil-zksync this never reproduces because the in-memory node updates
+// base-anvil this never reproduces because the in-memory node updates
 // pending state synchronously.
 //
 // What this module provides
@@ -41,10 +41,10 @@
 // This is purely internal to `LocalChainProvider`. It is *not* a public
 // API, not exported from the package root, and does not attempt to be a
 // general-purpose nonce manager. β/v2 admin operations move server-side
-// (LayerZero DVN delivery, Cofferdam TEE attestation) where this concern
+// (CDP Paymaster gas sponsorship, Cofferdam TEE attestation) where this concern
 // disappears entirely.
 
-import type { Provider as ZkProvider, Wallet as ZkWallet } from 'zksync-ethers'
+import type { JsonRpcProvider, Wallet } from 'ethers'
 
 const queues = new Map<string, Promise<unknown>>()
 const nonces = new Map<string, number>()
@@ -80,8 +80,8 @@ function isStaleNonceError(err: unknown): boolean {
  */
 export async function runAdminTx<T>(
   rpcUrl: string,
-  provider: ZkProvider,
-  adminWallet: ZkWallet,
+  provider: JsonRpcProvider,
+  adminWallet: Wallet,
   op: (nonce: number) => Promise<T>,
 ): Promise<T> {
   const key = queueKey(rpcUrl, adminWallet.address)

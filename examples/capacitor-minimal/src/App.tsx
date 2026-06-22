@@ -8,23 +8,24 @@
 //                                2. <SignInWithCofferdamButton>
 //                                3. useCofferdam()
 //
-//   - `local-chain`     (α-2): real LocalChainProvider against anvil-zksync.
-//                              Three roles on a single page (recruiter +
-//                              funder + worker) drive the full corporate-flow
-//                              on-chain:
-//                                postContractIntent → fundContract → award →
-//                                checkIn → checkOut → settle.
+//   - `local-chain`     (α-2): real LocalChainProvider against base-anvil.
+//                              Four roles on a single page (Finance +
+//                              HR + Supervisor witness + Worker) drive
+//                              the spot escrow on-chain:
+//                                approveUSDC + fund → setWitness (HR) →
+//                                checkIn (supervisor) → checkOut (supervisor,
+//                                auto-releases USDC).
 //                              You see every tx hash + status as it lands.
 //
 //   - `sepolia-testnet` (α-3): same UI + flow as local-chain, but pointed at
-//                              ZKSync Era Sepolia public testnet. Uses a
+//                              Base Sepolia public testnet. Uses a
 //                              separate VITE_TESTNET_* env namespace, scaled-
 //                              down amounts (~100× smaller so the demo
 //                              admin's faucet ETH doesn't drain), and
 //                              clickable block-explorer links on every tx.
 //
 //   - `native-aa`       (α-4): real NativeAccountProvider against the native
-//                              ZKSync Era AA stack. Sign-in derives a High-tier
+//                              Base AA stack. Sign-in derives a High-tier
 //                              P-256 passkey + the CofferdamSmartAccount's
 //                              counterfactual address; the account deploys via
 //                              the factory and transacts gaslessly through the
@@ -45,8 +46,16 @@ import {
 
 import { LocalChainDemo } from './LocalChainDemo'
 import { NativeAccountDemo } from './NativeAccountDemo'
+import { Web2LoginDemo } from './Web2LoginDemo'
 
-type NetworkMode = 'mock' | 'local-chain' | 'sepolia-testnet' | 'native-aa' | 'native-aa-testnet'
+type NetworkMode =
+  | 'mock'
+  | 'local-chain'
+  | 'sepolia-testnet'
+  | 'native-aa'
+  | 'native-aa-testnet'
+  | 'web2-auth'
+  | 'web2-auth-testnet'
 
 const NETWORK_MODE: NetworkMode =
   (import.meta.env.VITE_COFFERDAM_NETWORK as NetworkMode | undefined) ?? 'mock'
@@ -121,6 +130,12 @@ export default function App() {
   }
   if (NETWORK_MODE === 'native-aa-testnet') {
     return <NativeAccountDemo chain="testnet" />
+  }
+  if (NETWORK_MODE === 'web2-auth') {
+    return <Web2LoginDemo chain="local" />
+  }
+  if (NETWORK_MODE === 'web2-auth-testnet') {
+    return <Web2LoginDemo chain="testnet" />
   }
   return <MockDemo />
 }

@@ -31,7 +31,7 @@ const FIELDS: SessionAttestationFields = {
   scope: 'offshoresync',
   appPseudonym: 'cd_pseudo_0123456789abcdef01234567',
   accountAddress: ACCOUNT_A,
-  chainId: 300,
+  chainId: 84532,
   verified: true,
   issuedAt: 1_781_000_000_000,
 }
@@ -65,7 +65,7 @@ describe('session attestation codec', () => {
         expect(decoded.scope).toBe(FIELDS.scope)
         expect(decoded.appPseudonym).toBe(FIELDS.appPseudonym)
         expect(decoded.accountAddress).toBe(ACCOUNT_A)
-        expect(decoded.chainId).toBe(300)
+        expect(decoded.chainId).toBe(84532)
         expect(decoded.verified).toBe(true)
         expect(decoded.sig).toBe(att.sig)
 
@@ -77,7 +77,7 @@ describe('session attestation codec', () => {
         const token = await signSessionAttestation({ signer: mk(), fields: FIELDS })
         expect(() =>
           decodeAndVerifySessionAttestation(token, {
-            expect: { scope: 'offshoresync', accountAddress: ACCOUNT_A.toUpperCase(), chainId: 300 },
+            expect: { scope: 'offshoresync', accountAddress: ACCOUNT_A.toUpperCase(), chainId: 84532 },
           }),
         ).not.toThrow()
       })

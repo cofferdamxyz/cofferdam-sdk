@@ -1,16 +1,16 @@
 // Tests for the WebAuthn passkey path: the SDK's WebAuthn assertion encoding +
 // NativeAccountProvider driving a real-passkey-shaped account on-chain.
 //
-// Unit tests run anywhere. The integration block needs anvil-zksync at :8011
-// with the native-AA stack + WebAuthnPasskeyAuthority deployed (yarn
-// deploy:auth:local && yarn deploy:native:local). It skips gracefully if not.
+// Unit tests run anywhere. The integration block needs base-anvil at :8545
+// with the ERC-4337 stack + WebAuthnPasskeyAuthority deployed (yarn
+// deploy:local). It skips gracefully if not.
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { describe, expect, it, beforeAll } from 'vitest'
 import { p256 } from '@noble/curves/p256'
 import { keccak256, toUtf8Bytes, getBytes } from 'ethers'
-import { Provider as ZkProvider, Wallet as ZkWallet, Contract as ZkContract } from 'zksync-ethers'
+import { JsonRpcProvider, Wallet as EthWallet, Contract as EthContract } from 'ethers'
 
 import {
   NativeAccountProvider,
@@ -23,8 +23,8 @@ import {
   encodePasskeyConfig,
 } from '../src/index.js'
 
-const RPC_URL = 'http://127.0.0.1:8011'
-const CHAIN_ID = 260
+const RPC_URL = 'http://127.0.0.1:8545'
+const CHAIN_ID = 31337
 const DEPLOYER_PK = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
 
 // ── Unit ─────────────────────────────────────────────────────────────────────
@@ -89,11 +89,11 @@ function loadDeployment(): NativeWebAuthnDeployment | null {
   const p = path.resolve(
     new URL(import.meta.url).pathname,
     '..', '..', '..', '..', '..',
-    'contracts', 'deployments', 'inMemoryNode.json',
+    'base-contracts', 'deployments', 'localhost.json',
   )
   if (!fs.existsSync(p)) return null
   const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
-  const factory = raw.CofferdamAccountFactory?.address
+  const factory = raw.CofferdamAccountFactory4337?.address
   const paymaster = raw.CofferdamPaymaster?.address
   const webauthnModule = raw.WebAuthnPasskeyAuthority?.address
   if (!factory || !paymaster || !webauthnModule) return null
@@ -115,8 +115,8 @@ async function nodeReachable(): Promise<boolean> {
 }
 
 const FORCE = process.env.COFFERDAM_LOCAL_INTEGRATION === '1'
-const FACTORY_ABI = [
-  'function getAccountAddress(bytes32 salt, address initialModule, bytes initialConfig) view returns (address)',
+const FACTORY_ABI: string[] = [
+  'function getAddress(address initialModule, bytes initialConfig, bytes32 salt) view returns (address)',
 ]
 
 describe('NativeAccountProvider with WebAuthn passkey (integration)', () => {
@@ -129,8 +129,8 @@ describe('NativeAccountProvider with WebAuthn passkey (integration)', () => {
     if (!d || !node) {
       skip = true
       const reason = !node
-        ? `anvil-zksync not reachable at ${RPC_URL}`
-        : 'WebAuthn native stack missing from inMemoryNode.json — run deploy:auth:local && deploy:native:local'
+        ? `base-anvil not reachable at ${RPC_URL}`
+        : 'WebAuthn ERC-4337 stack missing from localhost.json — run yarn deploy:local'
       if (FORCE) throw new Error(`[NativeWebAuthn integration] ${reason}`)
       // eslint-disable-next-line no-console
       console.warn(`[NativeWebAuthn integration] skipping: ${reason}`)
@@ -171,9 +171,9 @@ describe('NativeAccountProvider with WebAuthn passkey (integration)', () => {
 
     const salt = keccak256(toUtf8Bytes(`cofferdam-native-account|${userId}`))
     const config = encodePasskeyConfig(softwareWebAuthnPublicKey(priv))
-    const chain = new ZkProvider(RPC_URL)
-    const factory = new ZkContract(dep.factory, FACTORY_ABI, chain)
-    const onchain: string = await factory.getAccountAddress(salt, dep.webauthnModule, config)
+    const chain = new JsonRpcProvider(RPC_URL)
+    const factory = new EthContract(dep.factory, FACTORY_ABI as unknown as string[], chain)
+    const onchain: string = await factory.getFunction('getAddress')(dep.webauthnModule, config, salt)
     expect(addr.toLowerCase()).toBe(onchain.toLowerCase())
   }, 30_000)
 
@@ -187,14 +187,13 @@ describe('NativeAccountProvider with WebAuthn passkey (integration)', () => {
     await provider.ensureDeployed()
     expect(await provider.isDeployed()).toBe(true)
 
-    const chain = new ZkProvider(RPC_URL)
-    const deployer = new ZkWallet(DEPLOYER_PK, chain)
+    const chain = new JsonRpcProvider(RPC_URL)
+    const deployer = new EthWallet(DEPLOYER_PK, chain)
     await (await deployer.sendTransaction({ to: dep.paymaster, value: 1_000_000_000_000_000_000n })).wait()
 
     expect(await chain.getBalance(accountAddress)).toBe(0n)
     const receipt = await provider.sendTransaction({ to: accountAddress, value: 0n })
     expect(receipt.status).toBe(1)
     expect(await chain.getBalance(accountAddress)).toBe(0n)
-    expect(await chain.getTransactionCount(accountAddress)).toBe(1)
   }, 90_000)
 })

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Stream + decode local-chain activity over JSON-RPC.
 //
-// Polls `eth_blockNumber` against the configured anvil-zksync RPC, fetches
+// Polls `eth_blockNumber` against the configured base-anvil RPC, fetches
 // each new block with its txs, and prints one line per tx with:
 //   - the function name + decoded args (if the call target is the Receiver
 //     or the Escrow)
 //   - every emitted event from those two contracts
 //
-// Why a tail script and not just turn up anvil-zksync's verbosity? Because
+// Why a tail script and not just turn up anvil's verbosity? Because
 // the latter spams every internal system-contract call and is impossible
 // to scan visually during a click-through demo. This script is "what
 // happened on YOUR contracts, in chronological order, in one line per tx".
@@ -23,11 +23,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Interface, formatEther } from 'ethers'
-// zksync-ethers' Provider handles ZKSync's EIP-712 (type 0x71/113) tx
-// envelope, which stock ethers JsonRpcProvider chokes on. We're already
-// depending on it for the demo so it costs nothing here.
-import { Provider as ZkProvider } from 'zksync-ethers'
+import { Interface, formatEther, JsonRpcProvider } from 'ethers'
 
 // ── Env loading ────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -61,8 +57,8 @@ const IS_TESTNET = NETWORK_MODE === 'sepolia-testnet'
 const RPC =
   env.RPC ||
   (IS_TESTNET
-    ? env.VITE_TESTNET_RPC_URL || 'https://sepolia.era.zksync.dev'
-    : env.VITE_LOCAL_RPC_URL || 'http://127.0.0.1:8011')
+    ? env.VITE_TESTNET_RPC_URL || 'https://sepolia.base.org'
+    : env.VITE_LOCAL_RPC_URL || 'http://127.0.0.1:8545')
 
 const RECEIVER =
   env.RECEIVER ||
@@ -181,11 +177,11 @@ const BACKFILL = Number(flagVal('backfill', env.BACKFILL ?? '50'))
 const PRINT_ALL = !!flagVal('all', false)
 
 // ── Main loop ──────────────────────────────────────────────────────────────
-const provider = new ZkProvider(RPC)
+const provider = new JsonRpcProvider(RPC)
 
 const net = await provider.getNetwork().catch(() => null)
 if (!net) {
-  console.error(c.red(`Could not reach RPC at ${RPC}. Is anvil-zksync running?`))
+  console.error(c.red(`Could not reach RPC at ${RPC}. Is base-anvil running?`))
   process.exit(1)
 }
 
@@ -236,7 +232,7 @@ while (true) {
   }
 
   // Heartbeat: prove the script is alive even when no blocks land.
-  // anvil-zksync only mines on tx receipt, so a chain head that doesn't
+  // anvil only mines on tx receipt, so a chain head that doesn't
   // advance just means nobody's sent a tx — NOT that tail is broken.
   const now = Date.now()
   if (now - lastHeartbeat >= HEARTBEAT_MS) {
@@ -251,14 +247,10 @@ while (true) {
 // ── Block processor ───────────────────────────────────────────────────────
 //
 // Implementation note: we use `provider.send('eth_getTransactionByHash', …)`
-// instead of `provider.getTransaction(hash)`. The latter — at least in the
-// version of `zksync-ethers` we depend on — incorrectly returns the
-// RLP-encoded EIP-712 (type-0x71) envelope in the `.data` field for ZKSync
-// transactions, so `Interface.parseTransaction()` chokes and we lose
-// function-name decoding. The raw RPC response always carries the inner
-// calldata under `input` (the geth-standard field name), which is what we
-// want. Same reasoning for value/from/to — we read straight off the
-// JSON-RPC payload to avoid any wrapper quirk.
+// instead of `provider.getTransaction(hash)` to get the raw JSON-RPC payload
+// directly. The raw response always carries the calldata under `input`
+// (the geth-standard field name), which is what we want. Same reasoning for
+// value/from/to — we read straight off the JSON-RPC payload.
 async function processBlock(n) {
   // `false` here = we only want tx hashes, we'll fetch each tx with
   // `eth_getTransactionByHash` so we get the raw JSON-RPC payload.
