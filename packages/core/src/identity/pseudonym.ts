@@ -1,13 +1,20 @@
-// Pseudonym + scope-key derivation.
+// Pseudonym + scope-key derivation using HKDF (RFC 5869).
 //
 // Implements the construction from cofferdam-sdk/README.md §5.6:
 //
-//   appPseudonym(user, app) = H(scopeSalt[app] || nullifier(user) || domain-sep)
+//   appPseudonym(user, app) = HKDF-Extract(salt=scopeSalt[app], IKM=nullifier(user))
+//                             then HKDF-Expand(PRK, info=domain-sep, L=12 bytes)
 //
-// In v0.x (mock + local + testnet phases) the SHA-256 implementation here
-// stands in for what will become a more carefully-domain-separated KDF in
-// production. The wire-level output format (`cd_pseudo_<24-hex>`) is stable
-// and matches the README's example values.
+// HKDF provides proper extract-then-expand semantics: the extract phase
+// concentrates entropy from the nullifier into a pseudo-random key (PRK)
+// keyed by the per-app scopeSalt, and the expand phase domain-separates
+// the output. This is structurally stronger than concatenation + hash
+// because the salt and IKM serve distinct cryptographic roles rather than
+// being mixed into a single digest input.
+//
+// The wire-level output format (`cd_pseudo_<24-hex>`) is stable across
+// the v0.x → v1 upgrade boundary for mock/local/testnet deployments that
+// re-derive on first login after the upgrade.
 //
 // Runs identically in browsers (modern WebView), React Native (via the
 // react-native-web-crypto polyfill in α-2+), and Node >=19 (built-in
@@ -16,7 +23,7 @@
 const PSEUDONYM_DOMAIN_SEP = 'cofferdam-pseudonym-v1'
 const SCOPEKEY_DOMAIN_SEP = 'cofferdam-scopekey-v1'
 
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
+function getSubtle(): SubtleCrypto {
   const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle
   if (!subtle) {
     throw new Error(
@@ -24,8 +31,46 @@ async function sha256(data: Uint8Array): Promise<Uint8Array> {
         'For React Native, install a webcrypto polyfill (lands as a dep in @cofferdam/sdk-react-native).',
     )
   }
-  const hash = await subtle.digest('SHA-256', data as BufferSource)
-  return new Uint8Array(hash)
+  return subtle
+}
+
+/**
+ * HKDF-Extract-then-Expand (RFC 5869) via Web Crypto API.
+ *
+ * @param salt - Salt for the extract phase (per-app scopeSalt or scope id)
+ * @param ikm  - Input key material (user nullifier or master seed)
+ * @param info - Context / domain-separation string for the expand phase
+ * @param byteLength - Number of output bytes
+ */
+async function hkdf(
+  salt: string,
+  ikm: string,
+  info: string,
+  byteLength: number,
+): Promise<Uint8Array> {
+  const subtle = getSubtle()
+  const encoder = new TextEncoder()
+
+  const keyMaterial = await subtle.importKey(
+    'raw',
+    encoder.encode(ikm) as BufferSource,
+    { name: 'HKDF' },
+    false,
+    ['deriveBits'],
+  )
+
+  const bits = await subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: encoder.encode(salt) as BufferSource,
+      info: encoder.encode(info) as BufferSource,
+    },
+    keyMaterial,
+    byteLength * 8,
+  )
+
+  return new Uint8Array(bits)
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -53,9 +98,8 @@ export async function derivePseudonym(
   scopeSalt: string,
   nullifier: string,
 ): Promise<string> {
-  const input = `${scopeSalt}|${nullifier}|${PSEUDONYM_DOMAIN_SEP}`
-  const digest = await sha256(new TextEncoder().encode(input))
-  return `cd_pseudo_${bytesToHex(digest.slice(0, 12))}`
+  const derived = await hkdf(scopeSalt, nullifier, PSEUDONYM_DOMAIN_SEP, 12)
+  return `cd_pseudo_${bytesToHex(derived)}`
 }
 
 /**
@@ -71,7 +115,6 @@ export async function deriveScopeKey(
   masterSeed: string,
   scope: string,
 ): Promise<string> {
-  const input = `${masterSeed}|${scope}|${SCOPEKEY_DOMAIN_SEP}`
-  const digest = await sha256(new TextEncoder().encode(input))
-  return `cdsk_${bytesToHex(digest)}`
+  const derived = await hkdf(scope, masterSeed, SCOPEKEY_DOMAIN_SEP, 32)
+  return `cdsk_${bytesToHex(derived)}`
 }

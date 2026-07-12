@@ -4,12 +4,18 @@
 > `@/Users/hoff/OffshoreSync/TODO.md`. Written first; implementation
 > follows this doc.
 >
-> **Rev-6 (2026-05-30).** This doc supersedes the LayerZero-V2 +
-> AWS-Nitro-Enclave narrative in `contracts/WEB3_CONVERSION.md` and
-> in earlier versions of `cofferdam-app/ARCHITECTURE.md`. The production
-> identity rail is **v2 NullifierRegistry on ZKSync Era**, attested
-> by a **Cloudflare Container Self prover**. LayerZero exits the
-> critical path entirely; AWS dependencies do not enter it. See
+> **Identity rail.** The production identity rail is the **v2
+> NullifierRegistry on Base**, attested by a Self prover running in
+> Cofferdam's **own open-source `cofferdam-prover` Worker** — a
+> **Cloudflare Container** with service-binding-only ingress,
+> egress-allowlisted, stateless, and reproducibly built. The Groth16
+> proof is **verified on-chain on Base by Cofferdam itself**; there is
+> no third-party bridge or external verifier anywhere in the path.
+> **No TEE is required** — the prover's security properties come from
+> open-source auditability, reproducible builds, operational hardening
+> (§5), and the on-chain `SelfAttesterRegistry` kill-switch. A formal
+> TEE-attestation upgrade (AWS Nitro Enclave) remains an **optional**
+> Phase γ hardening, not a dependency. See
 > `@/Users/hoff/OffshoreSync/financial/REVENUE_MODEL.md` §10.1 +
 > §11 for the financial implications of this stack decision.
 >
@@ -68,7 +74,7 @@
 ## 1. What ships in T1.1
 
 A single, coherent identity layer that replaces every `MockProvider`
-reference in production code paths with the real ZKSync Era flow.
+reference in production code paths with the real Base flow.
 The deliverable is **four sub-packages + one Cloudflare service +
 one v2 contract deploy**:
 
@@ -79,7 +85,7 @@ one v2 contract deploy**:
 | `@cofferdam/sdk-enterprise` (`packages/enterprise`) | Tenant + KYB + Polis SSO + Safe deploy primitives (vertical-agnostic, scoped under T3 in `ENTERPRISE_MODULE_PLAN.md`) | **NEW** (lifted from OffshoreSync's backend per the SDK-first restructure) |
 | `@cofferdam/sdk-vault` (`packages/vault`) | Workers AI `parseDocument` primitive — consumer brings prompt + schema | **NEW** |
 | Cloudflare Container `cofferdam-prover` | Self.xyz Groth16 prover wrapped in a reproducible-build image | **NEW** |
-| `contracts/contracts/v2/self/NullifierRegistry` deploy on ZKSync Era Sepolia + Mainnet | v2 production ingress (replaces the v1 LayerZero+Celo path) | deploy of already-audited code |
+| `contracts/contracts/v2/self/NullifierRegistry` deploy on Base Sepolia + Base Mainnet | v2 production ingress (replaces the legacy cross-chain bridge path) | deploy of already-audited code |
 
 Phases (executable in roughly the order listed; ranges overlap by
 ~30%):
@@ -88,7 +94,7 @@ Phases (executable in roughly the order listed; ranges overlap by
 Week 0 ─── design doc lock (this doc)
 Week 1-2 ─ CofferdamNativeProvider — passkey + Secure Enclave bridge
 Week 2-3 ─ CofferdamAppProvider — web deep-link round-trip
-Week 3-4 ─ v2 NullifierRegistry deploy on ZKSync Era Sepolia
+Week 3-4 ─ v2 NullifierRegistry deploy on Base Sepolia
 Week 4-6 ─ Cloudflare Container Self prover — image build + R2 SRS + smoke
 Week 5-7 ─ End-to-end: passkey → prove → attester sign → bindNullifier
 Week 6-8 ─ Multi-device reconciliation primitives (§7)
@@ -111,12 +117,12 @@ adds the production pair that replaces them.
 
 **Owns.** Passkey lives in iOS Secure Enclave / Android StrongBox —
 hardware-bound, non-exportable, biometric-gated. Smart account is
-on-chain on ZKSync Era; the passkey is the validator key.
+on-chain on Base (ERC-4337 account); the passkey is the validator key.
 
 **Responsibilities.**
 
 1. **Account deploy.** First-passkey-on-first-device — call the
-   ZKSync Era native AA factory; deploy the smart account with the
+   Base ERC-4337 account factory; deploy the smart account with the
    passkey as the sole initial validator (≤3 passkeys per AA
    enforced on-chain by `CofferdamAccountValidator` per
    `cofferdam-app/ARCHITECTURE.md` §3.3).
@@ -129,7 +135,7 @@ on-chain on ZKSync Era; the passkey is the validator key.
    Cloudflare Container prover (§4) — the RN app sends the
    pre-NFC passport handle to the Container endpoint and receives
    back the Groth16 proof + nullifier; then submits the attester-
-   signed `bindNullifier` tx to v2 `NullifierRegistry` on ZKSync.
+   signed `bindNullifier` tx to v2 `NullifierRegistry` on Base.
 5. **Multi-device follower flow.** Subsequent devices add a
    passkey to the existing AA via the `addPasskey` validator path,
    gated by an existing-device approval (per `cofferdam-app/ARCHITECTURE.md`
@@ -155,7 +161,7 @@ dashboard, future verticals), third-party Tier-2/Tier-3 integrators.
 2. **Cloudflare-Worker-mediated session exchange.** Web side opens
    a Worker session; RN app signs + posts the response back via
    Universal-Link return; Worker brokers the handshake.
-3. **Read-only chain calls.** Direct ZKSync Era RPC for
+3. **Read-only chain calls.** Direct Base RPC for
    `isAccountBound`, `accountToNullifier`, contract reads. No
    signing → no provider dependency for reads.
 4. **Returns** the same `SignInResponse` shape as the native
@@ -169,7 +175,11 @@ Web SDK consumers cannot host a hardware-backed passkey in a
 browser — WebAuthn in-browser is fine for *first-party* sites but
 cross-app passkey sharing is not a thing in 2026. The native
 provider holds the key; the web provider is a remote-signer client
-talking to the native provider.
+talking to the native provider. *(Refined 2026-07-04 by §2.6: for
+**natively-wrapped, Cofferdam-associated** consumer binaries,
+OS-level domain association does make cross-app `cofferdam.xyz`
+ceremonies possible; the claim above stands for pure-browser
+origins.)*
 
 This split also gives us **per-platform paymaster routing** without
 the SDK consumer having to know: the native provider pays through
@@ -209,7 +219,7 @@ against the worker's IdP, not a passkey. This is the
    deterministically derives the worker's **company-bound
    pseudonym** = `keccak256(companyScopeSalt || polisSub ||
    "cofferdam-company-pseudonym-v1")`, computes the
-   counterfactual AA address, and submits the ZKSync Era AA
+   counterfactual AA address, and submits the Base ERC-4337 account
    factory tx with `PolisSessionAuthority` as the sole initial
    authority module (paymaster-sponsored). The contract reference
    shape matches `CofferdamAccountValidator` in §3, but the
@@ -328,6 +338,121 @@ Two consequences the implementation MUST honour:
   `ENTERPRISE_MODULE_PLAN.md` §3.3.4 already acknowledges. State this honestly
   at enrolment, not at loss.
 
+### 2.6 `CofferdamEmbeddedProvider` — embedded passkey ceremonies in natively-wrapped consumers (2026-07-04)
+
+**Hosts.** Consumer apps that ship a *native shell* around their
+web UI — Capacitor (OffshoreSync `react-client/` iOS + Android)
+first; the same pattern covers any RN / native consumer binary we
+or a partner sign. Pure-browser origins cannot host this provider
+(see the fallback ladder below).
+
+**Owns.** No keys — the same zero-custody posture as §2.2. The
+passkey lives in the platform authenticator (iCloud Keychain /
+Google Password Manager), RP-bound to `cofferdam.xyz`. The
+consumer binary gains only the ability to *request* ceremonies;
+every assertion is biometric-gated by the OS, and the system
+sheet shows `cofferdam.xyz` — Cofferdam login, not consumer
+branding.
+
+**Mechanism.** OS-level passkey APIs, never
+`navigator.credentials` — in-WebView WebAuthn is doubly
+impossible: (a) WKWebView does not expose WebAuthn to non-browser
+apps, and (b) a WebView origin (`capacitor://localhost`) can
+never satisfy the RP-ID registrable-suffix rule for
+`cofferdam.xyz` anyway. The ceremony goes through a thin native
+bridge — `ASAuthorizationPlatformPublicKeyCredentialProvider(
+relyingPartyIdentifier: "cofferdam.xyz")` on iOS,
+`androidx.credentials.CredentialManager` (rpId `cofferdam.xyz`)
+on Android — exposed to JS by a NEW `@cofferdam/sdk-capacitor`
+package. The bridge implements the existing
+`WebAuthnAuthenticator` seam
+(`packages/core/src/identity/webauthn.ts`), so
+`WebAuthnPasskeySigner`, the `WebAuthnAuth` ABI encoding, and the
+on-chain `WebAuthnPasskeyAuthority` verification are reused
+byte-for-byte — zero contract or core-SDK changes.
+
+**The association registry is the trust gate.** A binary can
+wield `cofferdam.xyz` passkeys only if Cofferdam lists it:
+
+- iOS — appID under `webcredentials` in
+  `cofferdam.xyz/.well-known/apple-app-site-association`;
+- Android — package + signing-cert SHA-256 with
+  `delegate_permission/common.get_login_creds` in
+  `cofferdam.xyz/.well-known/assetlinks.json`.
+
+Both files are server-side: adding or delisting a consumer needs
+**no app release**. This registry *is* the "Cofferdam-certified
+consumer" gate — association means the ability to prompt
+root-authority ceremonies, so it is granted contractually
+(first-party + reviewed Tier-2/3 partners) and revoked by
+delisting. The long tail of consumers is never associated; they
+use the fallback ladder.
+
+**Ceremony policy (plane-enforced, not OS-enforced).** An
+associated binary *can technically* request an assertion at any
+time (each one still biometric-gated and challenge-bound to a tx
+digest). Policy: embedded root ceremonies are for **enrolment +
+authority mutations + high-tier ops only**; day-to-day consumer
+traffic runs on `csa1:` session attestations. Enforcement lives
+at the plane (attestation-issuance scoping + relayer policy) and
+in the consumer contract — the OS cannot express it.
+
+**The onboarding payoff.** A user who installs *only* the
+consumer app gets a real `cofferdam.xyz` passkey + AA (deploy or
+counterfactual) with no Cofferdam-app install — removing the
+chicken-and-egg baked into §2.2. When they later install the
+Cofferdam RN app, the same synced passkey is already present
+(RP-bound, iCloud/GPM-synced) and §2.1 takes over as the primary
+surface. The §2.5 tier model is unchanged: the embedded ceremony
+establishes/exercises the **High** tier; the §2.5.2 ratchet and
+§2.5.3 recovery doors apply as written.
+
+**Fallback ladder** (runtime cascade inside the consumer SDK):
+
+1. `CofferdamEmbeddedProvider` — native shell present **and**
+   binary associated;
+2. `CofferdamAppProvider` (§2.2) — Cofferdam RN app installed;
+3. hosted ceremony page `id.cofferdam.xyz` via
+   `ASWebAuthenticationSession` / Chrome Custom Tabs (native
+   shells) or top-level redirect/popup (pure web) — WebAuthn on
+   the true origin. Required for the pure-web PWA regardless of
+   this provider, since cross-origin iframe
+   `publickey-credentials-create` support is still patchy.
+
+**RP-ID lock (decision).** `rpId = cofferdam.xyz` — locked. This
+is Cofferdam login; ceremonies host from any `*.cofferdam.xyz`
+origin and any associated binary. Passkeys do not migrate across
+RP IDs, so the domain is permanent; the escape hatch for a
+hypothetical future RP change is the §2.5 add-authority path
+(re-enrolment on the same AA), never a credential migration.
+
+**Implements.** `CofferdamProvider`. Same interface, same
+`SignInResponse` (`appPseudonym`; no wallet address surfaces in
+consumer UI — the wallet-isolation invariant is unchanged).
+
+**Not T1.1 scope.** Tracked as **T1.5** in `TODO.md` Track 1;
+buildable once T1.1's provider interface stabilises, in parallel
+with T1.2–T1.4. Not mainnet-gating.
+
+#### 2.6.1 Why four providers and not three
+
+§2.3's "cross-app passkey sharing is not a thing" holds for
+*pure-browser* consumers — an arbitrary web origin can never
+assert `cofferdam.xyz` credentials. What it under-counted is that
+our flagship consumers are **not pure browsers**: they are
+WebViews inside binaries we (or certified partners) sign, and the
+OS passkey APIs scope by **app association**, not page origin.
+That turns the §2.2 remote-signer detour from a necessity into a
+fallback, and makes Cofferdam login embeddable in *any* certified
+consumer app as a thin SDK layer:
+
+| Provider | Authority root | Ceremony surface | Requires |
+|---|---|---|---|
+| `CofferdamNativeProvider` (§2.1) | Device passkey | Cofferdam RN app | Cofferdam app install |
+| `CofferdamAppProvider` (§2.2) | Deep-link to native | Cofferdam RN app (remote) | Cofferdam app install |
+| `CofferdamEnterpriseProvider` (§2.4) | Polis SSO ID-token | IdP redirect | Employer IdP |
+| `CofferdamEmbeddedProvider` (§2.6) | Device passkey (RP `cofferdam.xyz`) | Consumer's own binary via OS APIs | AASA / assetlinks association |
+
 ## 3. The bind flow, end to end
 
 This is the single most important sequence in T1.1. Walk it
@@ -343,7 +468,7 @@ of these steps.
 │     - Biometric prompt for creation.                              │
 │     - Public key extracted for AA deploy.                         │
 │     ↓                                                             │
-│  3. RN app calls ZKSync Era AA factory (paymaster-sponsored):     │
+│  3. RN app calls Base ERC-4337 account factory (paymaster-sponsored): │
 │       deploy({ validator: CofferdamAccountValidator,           │
 │                initialPasskey: <P-256 pubkey> })                  │
 │     - Returns smart-account address AA-x.                         │
@@ -373,7 +498,7 @@ of these steps.
 │       publicInputs).                                              │
 │     - Returns: { attesterSignature, attesterAddress }.            │
 │     ↓                                                             │
-│  8. RN app submits to ZKSync Era v2 NullifierRegistry:            │
+│  8. RN app submits to Base v2 NullifierRegistry:                  │
 │       NullifierRegistry.verifyAndBind(                            │
 │         account: AA-x,                                            │
 │         a, b, c: groth16ProofPoints,                              │
@@ -399,13 +524,19 @@ of these steps.
 
 **Properties of this flow:**
 
-- **No LayerZero hop.** One chain. One bind tx.
-- **No AWS dependency.** Cloudflare end-to-end.
+- **No cross-chain hop.** One chain. One bind tx, verified on Base by
+  our own contract.
+- **Open-source prover Worker.** `cofferdam-prover` runs as a
+  Cloudflare Container with service-binding-only ingress, egress
+  allowlist, no persistent storage, and a reproducible build. The code
+  is MIT-licensed and auditable. No TEE is required for the current
+  trust model — see §5 for the full hardening parameters and §8 for
+  the optional Phase γ TEE-attestation upgrade path.
 - **Proof is verified on-chain.** Trust in the attester is narrow
   — the attester confirms "yes, I (Cofferdam Cloudflare backend)
   saw a proof come out of my Container that I'm willing to vouch
   for as freshly-computed." The actual Groth16 validity is checked
-  by `Verifier_vc_and_disclose` on ZKSync Era.
+  by `Verifier_vc_and_disclose` on Base.
 - **Same on-chain semantics as v1.** `IIdentityRegistry`-conforming;
   every consumer that reads `isAccountBound` /
   `accountToNullifier` continues to work unchanged. The escrow
@@ -444,7 +575,7 @@ worker eventually Self-binds (§3.11 below); the difference is purely
 │          polisSub: <from ID-token>,                               │
 │        }) → companyBoundPseudonym                                 │
 │      ↓                                                            │
-│  E3. AA factory deploy on ZKSync Era (paymaster-sponsored):       │
+│  E3. AA factory deploy on Base (paymaster-sponsored):             │
 │        deployCompanyBound({                                       │
 │          authority: PolisSessionAuthority,                        │
 │          polisJwksRef: <IdP JWKS URL ref>,                        │
@@ -733,7 +864,7 @@ patch).
 #### 3.11.5 The `recoverWithSelf` contract method
 
 The on-chain endpoint that the §3.11.2 R5 step calls. It lives on
-the **AA account contract** itself (the ZKSync Era smart account
+the **AA account contract** itself (the Base smart account
 deployed at E3 of §3.10), *not* on `NullifierRegistry` — the
 nullifier registry binding is unchanged; what `recoverWithSelf`
 mutates is the calling account's own authority-module set. The
@@ -878,8 +1009,8 @@ took the §3 sovereign-first path.
 > (`CofferdamAccountValidator.sol`). That contract is not yet
 > implemented; this subsection is its authoritative method-level
 > design spec until the Solidity lands under
-> `contracts/contracts/v1/zksync/`. See
-> `contracts/contracts/v1/zksync/README.md` → *Open items* for the
+> `contracts/contracts/v1/base/`. See
+> `contracts/contracts/v1/base/README.md` → *Open items* for the
 > implementation tracking entry.
 
 ### 3.12 Consumer password→passkey migration (rev-7.7)
@@ -894,7 +1025,7 @@ into a **high-tier device passkey on an AA**, under the §2.5 ratchet.
 
 The UX target is the Uniswap in-app-wallet model (secure a wallet in a few
 taps with FaceID/TouchID/passkey; attach more login methods later) — but on
-**ZKSync Era native AA + Secure-Enclave passkey instead of Privy MPC**, and
+**Base ERC-4337 + Secure-Enclave passkey instead of Privy MPC**, and
 with **no seed phrase** (recovery is §2.5.3, never seed export).
 
 ```
@@ -935,7 +1066,7 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
 │      and/or bind Self.xyz. Without it a single-device user has no  │
 │      recovery — surfaced honestly here, not at loss.              │
 │      ↓                                                            │
-│  C6. Server flips authProvider → 'zksync-passkey' and             │
+│  C6. Server flips authProvider → 'base-passkey' and             │
 │      wallet.migrationStatus → 'enrolled'. The password is demoted  │
 │      to a disabled/break-glass credential per the WEB3_CONVERSION  │
 │      §7 release ladder (legacy → passkey-default → disabled).    │
@@ -1052,19 +1183,19 @@ post-deploy:
 | Parameter | Setting | Rationale |
 |---|---|---|
 | **Persistent storage** | None. Container filesystem is ephemeral. | No proof bytes / no passport data survives across requests. |
-| **Egress allowlist** | (a) Cloudflare R2 public endpoint for SRS fetch (content-addressed, read-only); (b) `cofferdam-attester` Worker over Cloudflare's private network; (c) ZKSync Era RPC (read-only, for any contract sanity checks). **No other outbound.** | Forbids exfil to Self.xyz hosted relay or any third party; explicit positive allowlist. |
+| **Egress allowlist** | (a) Cloudflare R2 public endpoint for SRS fetch (content-addressed, read-only); (b) `cofferdam-attester` Worker over Cloudflare's private network; (c) Base RPC (read-only, for any contract sanity checks). **No other outbound.** | Forbids exfil to Self.xyz hosted relay or any third party; explicit positive allowlist. |
 | **Inbound** | Cloudflare Workers binding only — no public ingress IP. | The HTTP `/v1/prove` endpoint is reached only through the cofferdam-attester Worker; never directly. |
 | **Stdout/stderr** | Disabled in production. Structured error reporting to a separate audit channel; errors carry no PII / no proof bytes / no nullifier. | Defense-in-depth against accidental log capture of sensitive intermediate state. |
 | **Memory hygiene** | Prover process calls `wipe()` on the witness vector + intermediate field-element buffers after each proof. | Standard cryptographic hygiene; mitigates a memory-disclosure bug in CF's substrate. |
-| **Reproducible build** | Locked Dockerfile + pinned Node toolchain + pinned Self libs commit + pinned SRS hash. Image SHA tracked + published. | Receipt for future TEE-attestation upgrade (§8). |
+| **Reproducible build** | Locked Dockerfile + pinned Node toolchain + pinned Self libs commit + pinned SRS hash. Image SHA tracked + published. | Open-source auditability: any researcher can reproduce the image and verify the SHA. Also serves as receipt for optional Phase γ TEE-attestation upgrade (§8). |
 | **Stateless** | Multiple parallel instances OK; no shared state, no shared filesystem. | Horizontal scaling without coordination. |
 | **TTL** | Cloudflare's default (scale-to-zero idle timeout). | Idle instances don't sit accumulating state. |
 | **Time-bounded sessions** | Each `/v1/prove` call requires a fresh JWT from cofferdam-attester (60-second TTL). | Prevents replay; binds the prove to a specific signed bind-message. |
 
 ## 6. Workers AI `parseDocument` primitive (Vault parser)
 
-The Vault primitive moves from "TEE-backed Gemini Vision" (prior
-spec) to **Workers AI + Gemma-4-26B-A4B-IT** (`@cf/google/gemma-4-26b-a4b-it`).
+The Vault primitive moves from a prior spec that considered a TEE-backed
+Gemini Vision to **Workers AI + Gemma-4-26B-A4B-IT** (`@cf/google/gemma-4-26b-a4b-it`).
 Same model family OffshoreSync's `syncai` already trusts (Gemini 3
 distillation lineage), 4B active params on inference, native
 vision, $0.10/M tokens against Cloudflare edge GPUs.
@@ -1186,7 +1317,7 @@ implementation manifest.
 
 | Primitive | File | What it does |
 |---|---|---|
-| `bind.ts` pre-flight | `cofferdam-sdk/packages/core/src/identity/bind.ts` | Pre-flight `nullifierToAccount(n)` read on ZKSync Era *before* submitting the v2 bind tx — catches the collision case without wasting gas. Replaces the §3.6.3 "skip the LayerZero hop" subtlety with a single-chain pre-flight (cheaper + simpler). |
+| `bind.ts` pre-flight | `cofferdam-sdk/packages/core/src/identity/bind.ts` | Pre-flight `nullifierToAccount(n)` read on Base *before* submitting the v2 bind tx — catches the collision case without wasting gas. Replaces the §3.6.3 cross-chain subtlety with a single-chain pre-flight (cheaper + simpler). |
 | `NullifierAlreadyBoundError` | `cofferdam-sdk/packages/core/src/errors.ts` | Typed error surfaced when pre-flight or contract revert indicates the nullifier is bound to a different account. Triggers the reconciliation ceremony UI. |
 | `AccountAlreadyBoundError` | same | Typed error when the account already has a different nullifier (shouldn't happen in practice — caught for debug visibility). |
 | `loadCanonicalAA(recoveryEmail)` | `cofferdam-sdk/packages/core/src/identity/recovery.ts` | Warm-recovery resolver for §3.6.6 R3 — orphan device looks up the canonical AA address by recovery email *before* attempting a re-bind that would deterministically collide. |
@@ -1201,10 +1332,10 @@ shell**. T1.1 ships the *primitives*; T1.2 wires them into screens.
 This split is intentional — keeps T1.1's scope tight and lets the
 RN app surface evolve independently.
 
-## 8. Trust model + Phase γ TEE-attestation upgrade path
+## 8. Trust model + optional Phase γ TEE-attestation upgrade
 
-The current trust model is **"trust the Cofferdam Cloudflare
-backend"**. Concretely:
+The current trust model is **"trust the open-source, reproducibly-built
+Cofferdam Cloudflare backend"**. Concretely:
 
 - Cofferdam controls a SelfAttester key — registered on-chain in
   `SelfAttesterRegistry`.
@@ -1217,7 +1348,10 @@ backend"**. Concretely:
 What we are **not** doing today: producing a cryptographic
 attestation that the proof was generated inside a specific
 hardware-bound TEE. AWS Nitro Enclave + Amazon-root-CA + PCR
-whitelist would have given us that; we are deferring it.
+whitelist would give us that; it remains an **optional** Phase γ
+hardening, not a current dependency. The open-source + reproducible
+build + operational hardening posture (§5) is the current trust
+boundary.
 
 ### 8.1 The receipt that makes the upgrade clean
 
@@ -1230,14 +1364,15 @@ Every production-deployed `cofferdam-prover` Container image has a
 3. The production deploy manifest at
    `infra/cloudflare-prover/manifest.json`.
 
-When we later upgrade to formal TEE attestation (Phase γ in
+If we later upgrade to formal TEE attestation (Phase γ in
 `@/Users/hoff/OffshoreSync/TODO.md`), the migration is:
 
 1. Build the same `cofferdam-prover` image targeting the new TEE
    substrate (Cloudflare's confidential-compute primitive if it
    ships; or AWS Nitro Enclave; or whatever else looks credible
    then). **The image inputs do not change** — same Self libs, same
-   server, same SRS handling. Only the *substrate* changes.
+   server, same SRS handling. Only the *substrate* changes. This is
+   a pure operational upgrade with no code or contract changes.
 2. Compute the new image's SHA. Compute the matching attestation
    chain (PCR whitelist, attestation document signing key, etc.).
 3. Register the new attester via `SelfAttesterRegistry.addAttester(
@@ -1280,9 +1415,9 @@ Out-of-scope items, with pointers to where they *are* spec'd:
 
 | Topic | Where |
 |---|---|
-| Recurring escrow contract design (settlePeriod cron, leave-pay accrual) | `@/Users/hoff/OffshoreSync/contracts/contracts/v1/zksync/RECURRING_ESCROW_DESIGN.md` |
+| Recurring escrow contract design (settlePeriod cron, leave-pay accrual) | `@/Users/hoff/OffshoreSync/contracts/contracts/v1/base/RECURRING_ESCROW_DESIGN.md` |
 | Witness delegation registry (industry-agnostic `witnessKind` bytes32) | `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §6.A + §6.B |
-| Per-tenant pseudonym derivation (TEE-mediated nullifier → per-tenant ID) | `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §5 (enterprise architecture) + `@/Users/hoff/OffshoreSync/STRATEGY.md` §5 (sovereign-vs-enterprise resolution) |
+| Per-tenant pseudonym derivation (HKDF-mediated nullifier → per-tenant ID) | `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §5 (enterprise architecture) + `@/Users/hoff/OffshoreSync/STRATEGY.md` §5 (sovereign-vs-enterprise resolution) |
 | Pricing tiers / take rates / TAM | `@/Users/hoff/OffshoreSync/financial/REVENUE_MODEL.md` §8 + §9 + §10 |
 | Strategic vertical-pilot framing | `@/Users/hoff/OffshoreSync/STRATEGY.md` |
 | Companion-app feature surface (messaging, vault, payments) | `@/Users/hoff/OffshoreSync/cofferdam-app/ARCHITECTURE.md` §4 |
@@ -1294,7 +1429,7 @@ Out-of-scope items, with pointers to where they *are* spec'd:
 
 Every primitive added in T1.1 ships with unit tests:
 
-- `CofferdamNativeProvider` — mocked Secure Enclave + ZKSync RPC;
+- `CofferdamNativeProvider` — mocked Secure Enclave + Base RPC;
   test signIn / passkey signing / AA tx flow / passport bind
   happy path + every typed error.
 - `CofferdamAppProvider` — mocked deep-link round-trip + Worker
@@ -1309,7 +1444,7 @@ Every primitive added in T1.1 ships with unit tests:
 
 ### 10.2 Integration tests
 
-End-to-end against ZKSync Era Sepolia + a Cloudflare Container
+End-to-end against Base Sepolia + a Cloudflare Container
 deployment of `cofferdam-prover` pointing at a published test
 build:
 
@@ -1344,6 +1479,24 @@ breaks in the field.
 
 ## Change log
 
+- **2026-07-04 — Embedded consumer passkey provider (§2.6).**
+  Adds `CofferdamEmbeddedProvider` + NEW `@cofferdam/sdk-capacitor`:
+  natively-wrapped consumers (Capacitor OffshoreSync first)
+  perform real `cofferdam.xyz` passkey ceremonies via OS APIs
+  (`ASAuthorizationController` / `CredentialManager`) under the
+  AASA + assetlinks **association registry** — never in-WebView
+  WebAuthn (doubly impossible: WKWebView restriction + `localhost`
+  origin vs RP ID). Ceremony injects through the existing
+  `WebAuthnAuthenticator` seam; contracts + core SDK unchanged.
+  Locks `rpId = cofferdam.xyz` permanently; records the
+  enrolment-only root-ceremony policy (day-to-day = `csa1:`
+  attestations, plane-enforced); defines the three-step fallback
+  ladder ending at the hosted ceremony page `id.cofferdam.xyz`
+  (needed for the pure-web PWA regardless). §2.3's "cross-app
+  passkey sharing is not a thing" refined — it now holds only for
+  pure-browser origins. §2.6.1 adds the four-provider mapping
+  table. Tracked as T1.5 in `TODO.md`; not T1.1 scope, not
+  mainnet-gating.
 - **2026-06-01 — rev 7.1 alignment patch.** Extends the doc to
   cover the two-tier identity binding introduced by
   `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §3.3.
@@ -1377,7 +1530,7 @@ breaks in the field.
   and a contrast table against the §3.10 E7 `addAuthority`
   happy-path call. The spec is authoritative for the AA-account
   contract until the Solidity lands under
-  `contracts/contracts/v1/zksync/` (tracked in that dir's README
+  `contracts/contracts/v1/base/` (tracked in that dir's README
   *Open items*). New typed error `AuthorityAlreadyBoundError`
   added to the SDK core errors list. Header front-matter status block adds a
   rev-7.1 paragraph cross-linking the alignment context.

@@ -67,7 +67,8 @@ Consumer app calls cofferdam.signIn({ scope, ...policy })
            * policy.enforceSelfBeforeAccount = true (STRICT, e.g. a banking app):
              - Run Self.xyz NFC passport flow first.
              - Wait for v2 NullifierRegistry.bindNullifier confirmation
-               on Base (single-chain, ~seconds; no LayerZero hop).
+               on Base (single-chain, ~seconds, verified on-chain by
+               our own contract).
              - ONLY THEN deploy the smart account.
        │
        ▼
@@ -125,7 +126,7 @@ This is the **single most important policy decision** in the SDK and deserves it
 - This is the right policy for **social, content, and marketplace apps** where blocking signup on a 5-minute passport scan kills conversion.
 
 **`enforceSelfBeforeAccount: true`** (STRICT):
-- The smart account is **NOT deployed** until the Self.xyz passport flow has completed AND the v2 `NullifierRegistry.bindNullifier` tx has confirmed on Base (single-chain, paymaster-sponsored; no LayerZero hop in production post-rev-6).
+- The smart account is **NOT deployed** until the Self.xyz passport flow has completed AND the v2 `NullifierRegistry.bindNullifier` tx has confirmed on Base (single-chain, paymaster-sponsored, verified on-chain by our own contract).
 - The user cannot sign in to the consumer app at all without a completed Self verification.
 - This is the right policy for **regulated apps** — banking, large-value financial flows, government-adjacent services — where the consumer cannot afford an unverified-account state.
 - Trade-off: the onboarding flow becomes ~1–2 minutes (NFC + Cloudflare Container Groth16 prove + single Base bind tx), and the user needs an NFC-equipped phone with a valid biometric passport.
@@ -339,8 +340,7 @@ const txHash = await cofferdam.signAndSendTx({
   data:        '0x…',
   value:       0n,
   description: 'Accept job contract #1234 with Acme Drilling',
-  chain:       'base',           // 'base' is the production rail; legacy 'celo'
-                                  // remains routable for read-only / archival flows.
+  chain:       'base',           // 'base' is the only production rail.
   sponsorship: 'auto',           // 'auto' | 'self' | 'none'
 })
 
@@ -639,7 +639,7 @@ const result = await cofferdam.payments.send({
   to:          '0x…',            // or toHandle: '@hoff'
   amount:      '1500.00',
   token:       'USDC',
-  chain:       'base',           // user may switch to 'celo' if they prefer
+  chain:       'base',           // Base is the only supported chain
   memo:        'Contract #1234 settlement bonus',
 })
 // → { txHash, chain } | { error: 'cancelled' | 'insufficient_balance' | ... }
@@ -816,7 +816,7 @@ Each profile has a stable `mockUserId`, so a given profile's `appPseudonym` and 
 | **Cofferdam mobile app** | Trusted root | Holds the passkey, the master key derivations, the document vault, the messaging keys. This is the security perimeter. |
 | **Device Secure Enclave / StrongBox** | Hardware root | The passkey private key never leaves it. |
 | **Cofferdam backend (Cloudflare)** | Semi-trusted | Sees encrypted blobs, public profile metadata, Bloom filter pointers, audit logs. Cannot decrypt documents or messages. |
-| **Self.xyz TEE** | External trust anchor | Briefly sees passport biometrics during proof generation. Then forgets. |
+| **Cofferdam prover Worker** | Open-source, auditable | Proof generation runs in `cofferdam-prover` (open source, reproducible build). No TEE required — the Worker is service-binding-only with no public ingress, egress-allowlisted, and stateless. See `IDENTITY_LAYER_DESIGN.md` §5. |
 
 ### 5.2 Per-consumer-app key scoping
 
@@ -846,13 +846,14 @@ The SDK is **MIT-licensed and open source**. Any security researcher can audit t
 
 > **The Cofferdam nullifier — the user's master identifier — never reaches the consumer app.** Even a total compromise of the consumer app's database cannot tie its user records to a Cofferdam nullifier, to a Self.xyz passport, or to any other consumer app's user records. This is structural, not policy.
 
-**Construction**:
+**Construction** (HKDF, RFC 5869):
 
 ```
-appPseudonym(user, app) = H(scopeSalt[app] || nullifier(user) || domain-separator)
+PRK     = HKDF-Extract(salt = scopeSalt[app], IKM = nullifier(user))
+appPseudonym = HKDF-Expand(PRK, info = "cofferdam-pseudonym-v1", L = 12 bytes)
 ```
 
-The `scopeSalt` is a per-consumer-app constant Cofferdam assigns at integration-onboarding time. The hash is computed inside the Cofferdam app on the user's device — the consumer app's server, Cofferdam's backend, and any network observer all see only the `appPseudonym`, never the salt + nullifier combination that produced it.
+The `scopeSalt` is a per-consumer-app constant Cofferdam assigns at integration-onboarding time. HKDF is computed inside the Cofferdam app on the user's device via the Web Crypto API (`SubtleCrypto.deriveBits` with `HKDF`/`SHA-256`) — the consumer app's server, Cofferdam's backend, and any network observer all see only the `appPseudonym`, never the salt + nullifier combination that produced it. The extract-then-expand structure ensures the salt and input key material serve distinct cryptographic roles, providing stronger domain separation than concatenation-plus-hash.
 
 **What the consumer app stores as the user's primary key**: the `appPseudonym`. Stable across sessions, devices, and passkey rotations. Different from the user's pseudonym in any other consumer app.
 
@@ -1144,7 +1145,7 @@ The reference integration is the canonical answer to *"how do I use this SDK?"* 
 | Verified-flavor conversations opened by your app's users | Social-flavor conversations |
 | Documents your app parses through the Vault's Workers AI pipeline | Documents your app uploads with `parser: 'none'` (blob-only) |
 | Escrows your app creates (take rate on notional) | Escrow *viewing* / status reads |
-| ~~LayerZero attestation mirrors triggered by your app~~  (legacy line; v2 identity binding is single-chain on Base and not separately metered) | Self verification gas (paymaster-borne in Plan A; user-borne in Plan B — never integrator-borne) |
+| ~~identity-binding events triggered by your app~~  (legacy line; v2 identity binding is single-chain on Base and not separately metered) | Self verification gas (paymaster-borne in Plan A; user-borne in Plan B — never integrator-borne) |
 | Per-call overages above the Tier 2 included quotas | API calls that are read-only / metadata-only |
 
 ### 7.2 Tiers (consumer-app pricing)
@@ -1182,7 +1183,6 @@ This is the canonical mapping from SDK calls to billable units. The SDK reports 
 | `escrow.release(...)` | ❌ | — | Take rate already collected at create. |
 | `payments.send(...)` (P2P, Cofferdam-to-Cofferdam) | ❌ | — | Subsidized. Gas only. |
 | `payments.offRamp(...)` | ❌ | — | You're not billed; **Cofferdam takes 0.3–0.5% directly from the FX spread**, transparent to the user. Tier 3 can negotiate revenue share. |
-| ~~`attestation.mirrorToZksync(...)` (LayerZero)~~ | n/a | $0 | **Retired in rev-6.** v2 identity binding lands directly on Base — there's no cross-chain mirror to meter. |
 | `identity.linkedAccount.update(...)` | ❌ | — | Free. |
 | All `*.list()`, `*.status()`, `*.get(...)` read APIs | ❌ | — | Free. |
 

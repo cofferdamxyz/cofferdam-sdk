@@ -165,7 +165,7 @@ export interface PasskeyEnrollmentResult {
 export interface SignInResponse {
   /**
    * Per-app stable identifier. Store as the user's primary key in your DB.
-   * Derived as H(scopeSalt[your-app] || nullifier(user) || domain-sep)
+   * Derived as HKDF(salt=scopeSalt[your-app], IKM=nullifier(user), info=domain-sep)
    * entirely on the user's device; the nullifier itself never reaches you.
    * See cofferdam-sdk/README.md §5.6.
    */
@@ -238,8 +238,7 @@ export interface CofferdamConfig {
  * Provider abstraction. Concrete implementations:
  * - MockProvider          — α-1 (this file's package)
  * - LocalChainProvider    — α-2 (talks to base-anvil via ethers)
- * - TestnetProvider       — α-3 (Base Sepolia; single-chain post rev-6,
- *                                Celo Alfajores removed from production path)
+ * - TestnetProvider       — α-3 (Base Sepolia; single-chain)
  * - ProductionProvider    — β  (Base mainnet + real Cofferdam mobile app deep-link)
  */
 export interface CofferdamProvider {
