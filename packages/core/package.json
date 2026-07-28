@@ -56,16 +56,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/OffshoreSync/cofferdam-sdk.git",
+    "url": "https://github.com/cofferdamxyz/cofferdam-sdk.git",
     "directory": "packages/core"
   },
-  "homepage": "https://github.com/OffshoreSync/cofferdam-sdk#readme",
+  "homepage": "https://github.com/cofferdamxyz/cofferdam-sdk#readme",
   "bugs": {
-    "url": "https://github.com/OffshoreSync/cofferdam-sdk/issues"
+    "url": "https://github.com/cofferdamxyz/cofferdam-sdk/issues"
   },
   "keywords": [
     "cofferdam",
-    "offshoresync",
     "identity",
     "wallet",
     "web3",

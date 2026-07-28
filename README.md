@@ -4,9 +4,9 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)]()
-[![Maintained by](https://img.shields.io/badge/maintained%20by-OffshoreSync%20LLC-0a66c2.svg)](https://offshoresync.com)
+[![Maintained by](https://img.shields.io/badge/maintained%20by-Cofferdam-0a66c2.svg)](https://cofferdam.xyz)
 
-`cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/OffshoreSync/Cofferdam) — a horizontally-scalable, open-source Web3 SDK + companion app for identity, end-to-end-encrypted messaging, verifiable credentials, and on-chain corporate payments, published by OffshoreSync LLC. Maritime is the first vertical pilot; the architecture is sector-neutral (see `@/Users/hoff/OffshoreSync/STRATEGY.md`). The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, Base native account abstraction, Cloudflare Containers, or Workers AI.
+`cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/cofferdamxyz/cofferdam-app) — a horizontally-scalable, open-source Web3 SDK + companion app for identity, end-to-end-encrypted messaging, verifiable credentials, and on-chain corporate payments. Maritime is the first vertical pilot; the architecture is sector-neutral. The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, Base native account abstraction, Cloudflare Containers, or Workers AI.
 
 > "Sign in with Cofferdam" is to maritime-grade identity what "Sign in with Apple" is to email-grade identity. The user owns their keys. The app gets a verified, sybil-resistant, cryptographically-anchored identity. Nobody hands plaintext data to anyone.
 
@@ -1195,7 +1195,7 @@ Your app never holds gas. Your users never see gas as a line item. The economics
                 │  Cofferdam paymaster pool (per chain)    │
                 │                                          │
                 │  Funded by: grants + Tier 2/3 revenue    │
-                │             + OffshoreSync LLC backstop  │
+                │             + Cofferdam Inc. backstop   │
                 └────────────┬─────────────────────────────┘
                              │ sponsors gas for...
                              ▼
@@ -1266,8 +1266,8 @@ This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C v
 // consumer-app/package.json
 {
   "dependencies": {
-    "@cofferdam/sdk":       "github:OffshoreSync/cofferdam-sdk#release-core-main",
-    "@cofferdam/sdk-react": "github:OffshoreSync/cofferdam-sdk#release-react-main"
+    "@cofferdam/sdk":       "github:cofferdamxyz/cofferdam-sdk#release-core-main",
+    "@cofferdam/sdk-react": "github:cofferdamxyz/cofferdam-sdk#release-react-main"
   }
 }
 ```
@@ -1291,7 +1291,7 @@ The `-testnet` variants run against Base Sepolia (chainId 84532) and read the `V
 |---|---|---|
 | `main` | `release-core-main`, `release-react-main` | **Default.** Stable, integration-tested channel. Recommended for all consumers; required for any build that ships to production. |
 | `tests` | `release-core-tests`, `release-react-tests` | Fast-moving experimental channel. Pin here only if you need a change that has not yet been promoted to `main`; expect more frequent breakage. |
-| any release-branch SHA | n/a | Pin to a specific snapshot for fully reproducible installs: `github:OffshoreSync/cofferdam-sdk#<release-branch-sha>`. |
+| any release-branch SHA | n/a | Pin to a specific snapshot for fully reproducible installs: `github:cofferdamxyz/cofferdam-sdk#<release-branch-sha>`. |
 
 Release branches are **force-pushed** by CI on every commit to their source branch, so during alpha consumers should run `yarn install --force` (or delete the relevant `node_modules` entry + lockfile entry) to pick up SDK changes. Once we publish to npm, this caveat disappears.
 
@@ -1368,7 +1368,7 @@ Both paths are exercised end-to-end on Base Sepolia by the `native-aa-testnet` a
 ## 9. Repo layout
 
 ```
-github.com/OffshoreSync/cofferdam-sdk/
+github.com/cofferdamxyz/cofferdam-sdk/
 ├── packages/
 │   ├── core/                       ← framework-agnostic TS, no UI
 │   │   ├── src/
@@ -1436,9 +1436,9 @@ github.com/OffshoreSync/cofferdam-sdk/
 
 MIT — see [LICENSE](LICENSE).
 
-Copyright © 2026 OffshoreSync LLC.
+Copyright © 2026 Cofferdam Inc.
 
-The Cofferdam name and logo are trademarks of OffshoreSync LLC. The SDK code is MIT-licensed; the trademark use is governed by a separate permissive trademark policy.
+The Cofferdam name and logo are trademarks of Cofferdam Inc. The SDK code is MIT-licensed; the trademark use is governed by a separate permissive trademark policy.
 
 ---
 

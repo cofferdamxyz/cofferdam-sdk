@@ -72,8 +72,8 @@ If you want to extract this folder as the starting point for your own Cofferdam-
    ```diff
    -  "@cofferdam/sdk": "*",
    -  "@cofferdam/sdk-react": "*",
-   +  "@cofferdam/sdk": "github:OffshoreSync/cofferdam-sdk#release-core-main",
-   +  "@cofferdam/sdk-react": "github:OffshoreSync/cofferdam-sdk#release-react-main",
+   +  "@cofferdam/sdk": "github:cofferdamxyz/cofferdam-sdk#release-core-main",
+   +  "@cofferdam/sdk-react": "github:cofferdamxyz/cofferdam-sdk#release-react-main",
    ```
 
    *(Use `release-{core,react}-tests` if you want bleeding-edge SDK builds; `release-{core,react}-main` is the stable channel.)*
@@ -88,7 +88,7 @@ The SDK's `peerDependencies` declare `@cofferdam/sdk` explicitly so both URLs mu
 
 ## 4. What this example deliberately does NOT do
 
-- **No styling framework.** Uses plain CSS in [`src/index.css`](./src/index.css) so you can read the SDK integration without filtering through Tailwind/MUI/Chakra noise. The OffshoreSync reference integration ([`react-client/src/components/auth/Cofferdam/`](https://github.com/OffshoreSync/OffshoreSync/tree/main/react-client/src/components/auth/Cofferdam)) shows how to wrap the SDK with a custom MUI surface.
+- **No styling framework.** Uses plain CSS in [`src/index.css`](./src/index.css) so you can read the SDK integration without filtering through Tailwind/MUI/Chakra noise. The OffshoreSync reference integration ([`react-client/src/components/auth/Cofferdam/`](https://github.com/OffshoreSync/react-client/tree/main/src/components/auth/Cofferdam)) shows how to wrap the SDK with a custom MUI surface.
 - **No router, no backend.** Single-page demo. Real consumer apps will route between sign-in and authenticated screens, and will exchange the `sessionToken` with their own backend for app-specific session issuance (α-3 territory).
 - **No persistence.** Sign-in state lives only in React state — refresh the page and you sign out. Real apps use the SDK's session storage helpers (β phase) or roll their own with the returned `sessionToken`.
 - **No real Cofferdam mobile app.** α-1 is mock-only. The button resolves in-process via `MockProvider`. α-3 swaps in the real provider that opens the Cofferdam mobile app via deep-link.

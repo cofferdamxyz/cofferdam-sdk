@@ -8,8 +8,8 @@ name: Release branches
 # package is at the repository root. Consumers install via the native yarn 1
 # git-URL syntax that does not require any third-party tarball service:
 #
-#   "@cofferdam/sdk":       "github:OffshoreSync/cofferdam-sdk#release-core-tests"
-#   "@cofferdam/sdk-react": "github:OffshoreSync/cofferdam-sdk#release-react-tests"
+#   "@cofferdam/sdk":       "github:cofferdamxyz/cofferdam-sdk#release-core-tests"
+#   "@cofferdam/sdk-react": "github:cofferdamxyz/cofferdam-sdk#release-react-tests"
 #
 # This is what the broader subtree-split family of patterns produces in
 # practice — minus the history preservation, which consumers do not consume.
