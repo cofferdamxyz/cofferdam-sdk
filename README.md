@@ -8,7 +8,7 @@
 
 `cofferdam-sdk` is the developer-facing surface of [Cofferdam](https://github.com/cofferdamxyz/cofferdam-app) — a horizontally-scalable, open-source Web3 SDK + companion app for identity, end-to-end-encrypted messaging, verifiable credentials, and on-chain corporate payments. Maritime is the first vertical pilot; the architecture is sector-neutral. The SDK lets any third-party app integrate Cofferdam as a verified-identity provider, an on-chain signing surface, an E2EE messaging backend, and an encrypted-document share target — without the integrating app needing to know anything about ZK proofs, Base native account abstraction, Cloudflare Containers, or Workers AI.
 
-> "Sign in with Cofferdam" is to maritime-grade identity what "Sign in with Apple" is to email-grade identity. The user owns their keys. The app gets a verified, sybil-resistant, cryptographically-anchored identity. Nobody hands plaintext data to anyone.
+> "Sign in with Cofferdam" is to passport-grade identity what "Sign in with Apple" is to email-grade identity. The user owns their keys. The app gets a verified, sybil-resistant, cryptographically-anchored identity. Nobody hands plaintext data to anyone.
 
 This SDK is **open source from day one**, MIT-licensed, framework-agnostic at the core, with first-class React, React Native, and web bindings. The first published integration is [OffshoreSync](https://offshoresync.com); the SDK is built to work for any vertical, not just maritime.
 
@@ -36,11 +36,11 @@ The SDK exposes **five primitives**, each of which delegates the heavy lifting t
 
 1. **Identity** — *"Is this user a verified, sybil-resistant human, and what's their stable identifier?"* Returns a **per-app pseudonym** (`appPseudonym`) — the consumer app's stable user identifier, derived from a Cofferdam-internal nullifier the consumer app never sees (see §5.6 *Privacy invariant*). Also returns a smart-account address on Base for chain-relevant operations, a verification status (Self.xyz nullifier-bound or not), and optional selective-disclosure claims (country, age range, OFAC status). **The nullifier itself is never exposed to the consumer app or its server** — two different consumer apps see two different pseudonyms for the same user; a breach of one consumer app cannot be union-correlated with another. **Self verification is value-gated** — the SDK does not require it at sign-in; it triggers Self only when the user touches a feature that genuinely needs it (verified-flavor messaging, contract signing, financial features, verified-context document sharing). See §2.4. The Identity primitive also supports **account linking metadata**: the consumer app supplies its display name + icon + per-user handle, which appears in the user's Cofferdam *Settings → Linked accounts* view.
 2. **Signing** — *"Have this user sign this on-chain transaction."* Used for escrow contracts, proof-of-presence check-ins, and any custom contract the integrating app defines.
-3. **Documents (Vault)** — *"Store, parse, list, view, and share encrypted documents for this user, scoped to my app."* The Vault is **generic, per-scope, and parser-configurable**: each consumer app registers the document categories it supports and the Gemini Vision schema to apply per category (or *no parser at all* for blob-only storage). OffshoreSync registers `maritime-certificate` with the STCW schema and recreates its existing Certificate Wallet UI on top of the SDK; a P&I-club app registers `claim-form` with a claims schema; a notary app registers raw documents with `parser: 'none'` and nothing is parsed. **Same dual-UI win as messaging** (see primitive #4): consumer apps either build their own document UI on top of the SDK *or* defer entirely to the Cofferdam app's Vault UI via `documents.openInCofferdam(docId)` — both work, pick per-surface. Plaintext never reaches the integrating app's server unless the user explicitly shares it.
+3. **Documents (Vault)** — *"Store, parse, list, view, and share encrypted documents for this user, scoped to my app."* The Vault is **generic, per-scope, and parser-configurable**: each consumer app registers the document categories it supports and the schema to apply per category (or *no parser at all* for blob-only storage). A trades platform registers `trade-certificate` with its own schema and recreates its existing Certificate Wallet UI on top of the SDK; an insurer registers `claim-form` with a claims schema; a notary app registers raw documents with `parser: 'none'` and nothing is parsed. (OffshoreSync, the reference integration, registers `maritime-certificate` with an STCW prompt — but no category name or schema is built into Cofferdam.) **Same dual-UI win as messaging** (see primitive #4): consumer apps either build their own document UI on top of the SDK *or* defer entirely to the Cofferdam app's Vault UI via `documents.openInCofferdam(docId)` — both work, pick per-surface. Plaintext never reaches the integrating app's server unless the user explicitly shares it.
 4. **Messaging** — *"Establish an E2EE conversation between two of my app's users."* The integrating app supplies the conversation metadata (e.g. match-room ID) and the social context ("these two are mutual friends in my app"); Cofferdam handles the handshake + cryptography. **The SDK can also bridge a handshake on behalf of the consumer app** — if A and B are friends on OffshoreSync but haven't yet handshaken on Cofferdam, A tapping `[Message]` triggers a one-tap mutual handshake using the OffshoreSync friendship as social attestation. Same primitive scales to **group invitations**: pick N users in OffshoreSync, every linked-Cofferdam participant receives a one-tap accept push.
 5. **Payments** — *"Open Cofferdam's send-money flow with this recipient + amount pre-filled."* The integrating app never touches funds.
 
-These five primitives are what make Cofferdam useful beyond OffshoreSync. A crewing agency, a P&I club, a port authority, a maritime training school, an offshore equipment leasing platform — any of them — gets a verified-identity + encrypted-document + on-chain-signing primitive for free via the SDK.
+These five primitives are what make Cofferdam useful beyond any single vertical. A staffing agency, a construction contractor, a healthcare locum platform, a logistics operator, a trade-school registrar, an equipment-leasing marketplace — any of them — gets a verified-identity + encrypted-document + on-chain-signing primitive for free via the SDK. Nothing in the SDK, the contracts, or the Vault schema registry is sector-specific; the domain lives entirely in the categories and prompts a consumer app registers for its own scope.
 
 ---
 
@@ -131,7 +131,7 @@ This is the **single most important policy decision** in the SDK and deserves it
 - This is the right policy for **regulated apps** — banking, large-value financial flows, government-adjacent services — where the consumer cannot afford an unverified-account state.
 - Trade-off: the onboarding flow becomes ~1–2 minutes (NFC + Cloudflare Container Groth16 prove + single Base bind tx), and the user needs an NFC-equipped phone with a valid biometric passport.
 
-The SDK exposes both options as a simple boolean flag on the `signIn` call. **OffshoreSync uses `false`.** A maritime banking app would use `true`.
+The SDK exposes both options as a simple boolean flag on the `signIn` call. **OffshoreSync uses `false`.** A banking or payments app would use `true`.
 
 ### 2.3 What the consumer app never receives
 
@@ -152,7 +152,7 @@ The SDK inherits the canonical policy from **§3.5 of the Cofferdam README** (*S
 | # | Trigger | SDK callsites that auto-prompt Self if not verified |
 |---|---|---|
 | 1 | **Verified-flavor conversation** | `messaging.openConversation({ flavor: 'verified' })`, `messaging.createGroup({ flavor: 'verified' })`, `conversation.upgradeToVerified()`. The SDK checks the verification state of the local user (and the peer, for openConversation) and runs the Self flow inline if needed. |
-| 2 | **Contract signing** | `signAndSendTx`, `escrow.acceptContract`, `escrow.checkIn`, `escrow.checkOut`, `escrow.attestCrewMember`, and any custom `signTypedData` call where the consumer-app contract requires a verified signer (declared in scope onboarding). |
+| 2 | **Contract signing** | `signAndSendTx`, `escrow.acceptContract`, `escrow.checkIn`, `escrow.checkOut`, and any custom `signTypedData` call where the consumer-app contract requires a verified signer (declared in scope onboarding). |
 | 3 | **Financial features** | `payments.send`, `payments.openOnRamp`, `payments.openOffRamp`, `payments.list`, and any other `payments.*` method. **All financial primitives require Self** because country selective-disclosure is what drives provider routing (Pix BR, GCash PH, Mobile Money NG/KE, etc.) — there is no fallback path for unverified users on the financial surface. |
 | 4 | **Sharing a document into a verified context** | `documents.requestShare({ recipient })` where `recipient` is a verified-context surface (e.g. a match-room, an escrow contract, another verified-flavor conversation). The SDK checks the recipient context and prompts Self only if the share target is verified-flagged. Sharing into unverified contexts (or simply storing / viewing your own documents) does NOT trigger Self. |
 
@@ -196,7 +196,7 @@ This is the **conversion mechanism** that makes Cofferdam viable for consumer-ap
 - Free social-flavor messaging + free Vault, both Self-free (immediate utility).
 - Self verification triggered exactly at the moment the user expects it — when they're applying for a job, signing a contract, or moving money.
 
-Versus the alternative (mandatory Self at signup), which kills 60–80% of installs in the maritime / emerging-market demographics this product is built for.
+Versus the alternative (mandatory Self at signup), which kills 60–80% of installs in the field-work and emerging-market demographics this product is built for.
 
 > **The SDK's job is to make this policy invisible to the consumer-app developer.** You write `payments.openOffRamp(...)`; the SDK handles the verification choreography for you. Same for messaging flavor, escrow signing, and verified-context document sharing.
 
@@ -259,6 +259,34 @@ const policy = {
 ## 4. API surface
 
 > Names and signatures below are illustrative — final API stabilizes at v0.1. Today's reading: *"this is the shape of the developer experience."*
+
+### 4.0 Implementation status
+
+**This section is a specification, not an inventory of working calls.** The SDK
+is being built against it in dependency order — sign-in, then device limits,
+then the identity proof, then everything that needs a verified session. Check
+this table before you plan an integration around anything below.
+
+| Surface | Status | Notes |
+|---|---|---|
+| `signIn`, `getSession`, `signOut` | ✅ **shipped** | On the `Cofferdam` class. |
+| `upgradeToPasskey`, `declinePasskeyUpgrade` | ✅ **shipped** | Consumer password→passkey ratchet. |
+| Device limits (≤3 passkeys, multi-device enrolment) | 🚧 **in progress** | Cap enforced on-chain by `AuthorityManagerBase`; `addAuthority` self-call + enrolment UI pending. |
+| Identity proof (Self.xyz nullifier bind) | 🚧 **in progress** | Chain side deployed; `bindNullifier` from the app not yet wired. |
+| Escrow signing | ✅ **shipped** | Via the exported `CofferdamSpotEscrowClient` / `CofferdamEscrowFactoryClient` classes — documented accurately in **§4.7a**. The `cofferdam.escrow.*` namespace sketched in §4.3 is ⏳ planned: the capability is real, that wrapper is not. |
+| `signAndSendTx`, `escrow.acceptContract` | ⏳ **planned** | No implementation. |
+| `documents.*`, `scope.registerDocumentCategories` (§4.4) | ⏳ **planned** | No implementation. |
+| `messaging.*` (§4.5) | ⏳ **planned** | No implementation. |
+| `payments.*` (§4.6) | ⏳ **planned** | No implementation. |
+| `linkedAccount.*` (§4.2) | ⏳ **planned** | No implementation. |
+
+> **⏳ planned means the property does not exist.** There is no `documents`,
+> `messaging`, `payments`, `scope`, or `linkedAccount` member on a `Cofferdam`
+> instance today — reaching for one is a `TypeError`, not a rejected promise.
+> The same applies to the §2.4 Self-trigger table, which specifies behaviour
+> over callsites that are not built yet.
+
+Tracked in the root `TODO.md` → *Cofferdam SDK — README ↔ implementation gap*.
 
 ### 4.1 Initialization
 
@@ -350,17 +378,19 @@ const txHash = await cofferdam.escrow.acceptContract({
   contractId:      1234n,
 })
 
-const txHash = await cofferdam.escrow.checkIn({ contractId: 1234n })
-const txHash = await cofferdam.escrow.checkOut({ contractId: 1234n })
-
-// Captain co-attests another user's check-in
-const txHash = await cofferdam.escrow.attestCrewMember({
-  contractId:  1234n,
-  crewAddress: '0x…',
-  vesselId:    'IMO1234567',
-  date:        '2026-05-17',
-})
+// Witness attests the worker on site. Both calls are `onlyWitness` in
+// `CofferdamSpotEscrow` — the worker never self-attests, and the witness
+// may not be the funder (enforced on-chain in `setWitness`). Who plays the
+// witness is the integrating app's business: a site supervisor, a shift
+// lead, a ship's captain, a clinic manager.
+const txHash = await cofferdam.escrow.checkIn({ escrow: '0x…', worker: '0x…' })
+const txHash = await cofferdam.escrow.checkOut({ escrow: '0x…' })
 ```
+
+> **Removed:** `escrow.attestCrewMember({ vesselId, crewAddress })` was a
+> pre-Cofferdam, maritime-only bootstrap call. It is gone — witness
+> attestation is already what `checkIn` / `checkOut` are, and the shipped
+> contract has no separate co-attestation entry point.
 
 ### 4.4 Documents (Vault)
 
@@ -375,19 +405,18 @@ Each consumer app registers, at integration-onboarding time, the document catego
 // Cofferdam stores the schema registry server-side and routes uploads accordingly.
 await cofferdam.scope.registerDocumentCategories([
   {
-    category: 'maritime-certificate',
+    category: 'trade-certificate',       // your own name — no names are reserved
     parser:   'workers-ai',              // backed by @cf/google/gemma-4-26b-a4b-it;
                                           // override per call with `model: '...'`
-    prompt:   maritimeCertificatePrompt, // your domain prompt (e.g. OffshoreSync's
-                                          // syncai/geminiService.js STCW prompt)
-    schema:   stcwCertificateSchema,     // your Zod schema for the structured fields
+    prompt:   tradeCertificatePrompt,    // your domain prompt
+    schema:   tradeCertificateSchema,    // your Zod schema for the structured fields
     display:  {
       // Optional: tells the Cofferdam app how to render this category in
       // its unified Vault inbox. Falls back to a generic key/value renderer.
       title:    '${certCode} – ${issuer}',
       subtitle: 'Expires ${expiryDate}',
-      badge:    'OffshoreSync',
-      icon:     'https://offshoresync.com/icon.png',  // app icon, configured at scope
+      badge:    'Acme Trades',
+      icon:     'https://acme.example/icon.png',  // app icon, configured at scope
     },
   },
   {
@@ -395,7 +424,7 @@ await cofferdam.scope.registerDocumentCategories([
     parser:   'workers-ai',
     prompt:   jobContractPrompt,
     schema:   jobContractSchema,
-    display:  { title: 'Contract #${contractId}', subtitle: '${vessel}' },
+    display:  { title: 'Contract #${contractId}', subtitle: '${siteName}' },
   },
   {
     category: 'raw-document',
@@ -404,6 +433,8 @@ await cofferdam.scope.registerDocumentCategories([
   },
 ])
 ```
+
+**Category names are arbitrary per scope.** Cofferdam reserves none and ships no domain schema: OffshoreSync registers `maritime-certificate` with an STCW prompt, a locum platform would register `medical-licence`, a haulier `driver-cpc`. The domain lives in your prompt and your Zod schema, never in the SDK.
 
 A consumer app that doesn't want ANY parsing — e.g. a notary app, a medical-record vault, a legal-correspondence archive — registers all its categories with `parser: 'none'`. Cofferdam stores the encrypted blob + thumbnail and never invokes Workers AI. The Cofferdam Vault UI renders a generic document card.
 
@@ -415,8 +446,8 @@ A consumer app that doesn't want ANY parsing — e.g. a notary app, a medical-re
 // memory ONLY if your scope's registered parser requires it.
 const doc = await cofferdam.documents.upload({
   blob:     fileBlob,                    // File | Blob | ArrayBuffer
-  filename: 'BOSIET_2026.pdf',
-  category: 'maritime-certificate',      // must match a registered category
+  filename: 'safety-cert-2026.pdf',
+  category: 'trade-certificate',         // must match a registered category
   context: {                             // arbitrary consumer-app metadata
     candidateId:  'cand_1234',
     uploadedFrom: 'profile-settings',
@@ -427,11 +458,11 @@ const doc = await cofferdam.documents.upload({
 //     thumbnailUrl: 'https://r2.cofferdam.xyz/thumb/…',  // encrypted; SDK
 //                                                         // decrypts on render
 //     parsed: {                                           // null if parser='none'
-//       certCode:          'BOSIET',
-//       issuer:            'OPITO',
+//       certCode:          'CERT-3A',        // whatever your schema defines
+//       issuer:            'Awarding Body',
 //       issuedDate:        '2024-03-15',
 //       expiryDate:        '2028-03-15',
-//       certificateNumber: 'OPITO-12345',
+//       certificateNumber: 'AB-12345',
 //       holderNameHash:    '0x…',
 //     },
 //     uploadedAt:   1700000000,
@@ -444,7 +475,7 @@ const doc = await cofferdam.documents.upload({
 // List the user's documents in your scope. Use this to populate your own
 // Certificate Wallet / Vault UI.
 const docs = await cofferdam.documents.list({
-  category: 'maritime-certificate',     // optional filter
+  category: 'trade-certificate',        // optional filter
   // optional: sortBy, limit, cursor for pagination
 })
 // → Array<{ docId, category, parsed, thumbnailUrl, uploadedAt, expiresAt }>
@@ -469,7 +500,7 @@ const blob = await cofferdam.documents.view({ docId: doc.docId })
 // you registered in §4.4.1, in Cofferdam's polished native UI, for free.
 await cofferdam.documents.openInCofferdam({
   docId: doc.docId,
-  // OR: scope:'mine', category:'maritime-certificate' to open the category list
+  // OR: scope:'mine', category:'trade-certificate' to open the category list
 })
 // → opens the Cofferdam app via deep-link; returns when user navigates back
 //   (or immediately, if the consumer app doesn't await the dismissal).
@@ -485,7 +516,7 @@ Use this when you want to ship documents-as-a-feature without building a viewer 
 // Same primitive that already existed; works for all categories including
 // `parser: 'none'` documents.
 const share = await cofferdam.documents.requestShare({
-  category:  'maritime-certificate',    // optional filter — only show matching docs
+  category:  'trade-certificate',       // optional filter — only show matching docs
   expiresIn: 7 * 24 * 60 * 60,           // seconds; share auto-expires
   recipient: cofferdam.scope,            // your consumer app
 })
@@ -495,7 +526,7 @@ const share = await cofferdam.documents.requestShare({
 //     thumbnailUrl:   'https://r2.cofferdam.xyz/thumb/…',
 //     decryptionKey:  '<wrapped to your scopeKey>',
 //     parsed:         { ... } | null,      // null if scope registered parser='none'
-//     category:       'maritime-certificate',
+//     category:       'trade-certificate',
 //     expiresAt:      1700604800,
 //   }
 
@@ -576,13 +607,13 @@ await conv.upgradeToVerified()
 
 ```ts
 // For consumer apps that want to bridge a handshake without immediately
-// starting a chat — e.g. "Add to my Cofferdam crew" button on a profile,
-// independent of any DM.
+// starting a chat — e.g. an "Add to my Cofferdam contacts" button on a
+// profile, independent of any DM.
 const result = await cofferdam.messaging.requestHandshake({
   peer: 'cd_pseudo_4f8a…',         // peer's appPseudonym in your scope
   context: {
     bridgeProof: 'mutual-friend-on-offshoresync',
-    note:        'Add as crew contact',
+    note:        'Add as work contact',
   },
 })
 // → { status: 'pending' | 'accepted' | 'declined' | 'already_handshaken' }
@@ -596,12 +627,12 @@ const result = await cofferdam.messaging.requestHandshake({
 // receive a soft prompt to install Cofferdam first (or are silently
 // skipped, depending on policy).
 const group = await cofferdam.messaging.createGroup({
-  name:    'Vessel Atlantis crew rotation – July 2026',
+  name:    'Site 12 rotation – July 2026',
   peers:   ['cd_pseudo_4f8a…', 'cd_pseudo_2a1c…', 'cd_pseudo_91be…'],
                                  // each peer's appPseudonym in your scope
   flavor:  'social',             // 'social' | 'verified' | 'auto'
   context: {
-    type:        'vessel-crew',
+    type:        'job-team',
     vacancyId:   'vac_98765',
     bridgeProof: 'shared-vacancy-on-offshoresync',
   },
@@ -612,12 +643,12 @@ const group = await cofferdam.messaging.createGroup({
 //   group.on('memberJoined', ...) fires as they accept.
 
 // Open an existing group
-const group = await cofferdam.messaging.openGroup({ groupId: 'crew_atlantis_2026' })
+const group = await cofferdam.messaging.openGroup({ groupId: 'team_site12_2026' })
 
 // Invite more members later
 await group.invite({
   peers: ['cd_pseudo_77ad…'],
-  context: { bridgeProof: 'added-by-captain' },
+  context: { bridgeProof: 'added-by-supervisor' },
 })
 
 // Group epoch key rotates on every member join / leave, preserving
@@ -628,7 +659,7 @@ await group.invite({
 
 - `bridgeProof` is a free-form string the consumer app uses to give Cofferdam (and the receiving user) social context for the handshake request. It's stored client-side, displayed to the recipient, and forms part of the handshake envelope's signed payload — so a malicious consumer app can't lie about *who* requested without the user accepting.
 - `onHandshakeNeeded: 'fail'` is appropriate for consumer apps that want to require an explicit "add as friend" step *before* showing a Message button (Cofferdam stays out of the friending UX).
-- Air-gapped (Mode C) handshakes are **not exposed via the SDK** — they are inherently a Cofferdam-app-only flow because both devices must be in physical proximity. Consumer apps surface a CTA *"Open Cofferdam to scan crew QR"* if they want to direct users into that flow.
+- Air-gapped (Mode C) handshakes are **not exposed via the SDK** — they are inherently a Cofferdam-app-only flow because both devices must be in physical proximity. Consumer apps surface a CTA *"Open Cofferdam to scan a contact QR"* if they want to direct users into that flow.
 
 ### 4.6 Payments
 
@@ -661,97 +692,93 @@ const history = await cofferdam.payments.history({
 
 ```ts
 // Once Cofferdam adds support for custom ZK proof circuits beyond Self.xyz
-// (e.g. STCW certification proofs), the SDK exposes them via:
+// — e.g. proving you hold a valid licence of some class without revealing
+// which one, or who issued it — the SDK exposes them via:
 const proof = await cofferdam.proofs.request({
-  circuitId: 'stcw-v6-1',
-  publicInputs: { issuedAfter: '2020-01-01', vesselClass: 'oil-rig' },
+  circuitId: 'trade-licence-v1',      // circuits are registered per scope
+  publicInputs: { issuedAfter: '2020-01-01', issuerClass: 'accredited' },
 })
 // → { proof, publicSignals, verifierAddress, attesterSig }
 ```
 
-### 4.7a On-chain escrow (α-2)
+### 4.7a On-chain escrow ✅ shipped
 
-The SDK ships a typed client for the `CofferdamSpotEscrow` Base contract. It handles both posting paths, the full lifecycle, contract-id extraction from receipts, and the status enum. Consumer apps integrating the on-chain employment-escrow flow import it instead of re-deriving the ABI.
+The SDK ships typed clients for the two Base escrow contracts: `CofferdamEscrowFactoryClient` (deploys one escrow **per job** via CREATE2) and `CofferdamSpotEscrowClient` (that job's lifecycle). Settlement is **USDC (6dp)**, not ETH. Consumer apps import these instead of re-deriving the ABI.
 
-```ts
-import { CofferdamSpotEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
-import { Wallet } from 'ethers'
-
-const escrow = new CofferdamSpotEscrowClient({
-  address: '0x…',                                       // Base Sepolia deploy
-  signer:  recruiterWallet,                              // any Cofferdam-bound ethers Wallet
-})
-```
-
-#### Self-funded path (solo operator / small business)
-
-Recruiter posts AND funds in a single tx:
+> **Rewritten 2026-08-02.** This section previously documented the α-2 ZKSync
+> client — `postContract` / `postContractIntent` / `fundContract(contractId)` /
+> `settle`, an `OPEN_FUNDING` sentinel, `hashTerms`, and amounts in wei. None of
+> those exist on the shipped client. Because the *class name* did not change, an
+> integrator following the old text would import successfully and then fail on
+> every single call. See `SPOT_ESCROW_RULES.md` for the settlement model.
 
 ```ts
-const termsHash = CofferdamSpotEscrowClient.hashTerms({
-  jobId: 'tideboat-galley-may-2026',
-  workerProfile: '@cofferdam:abc…',
-  pay: { amount: '0.001', token: 'ETH' },
-})
-const { contractId, txHash } = await escrow.postContract(
-  termsHash,
-  1_000_000_000_000_000n, // 0.001 ETH in wei
-  { onSent: (h) => console.log('submitted:', h) },
-)
+import {
+  CofferdamEscrowFactoryClient,
+  CofferdamSpotEscrowClient,
+} from '@cofferdam/sdk'
+
+// 1. Deploy one escrow for this job. Authorized callers only.
+const factory = new CofferdamEscrowFactoryClient({ address: '0x…', signer: hrWallet })
+const { escrowAddress } = await factory.createSpotEscrow(policy, salt)
+// Need the address before you deploy? predictSpotEscrowAddress(policy, salt)
+// uses the same CREATE2 formula as the contract.
+
+// 2. Finance approves + funds in USDC. When policy.amount is non-zero,
+//    fund() must deposit exactly that — the payout is fixed on-chain
+//    before the worker accepts.
+const asFinance = new CofferdamSpotEscrowClient({ address: escrowAddress, signer: financeWallet })
+await asFinance.approveUSDC(1_000_000n)   // 1.00 USDC
+await asFinance.fund(1_000_000n)
+
+// 3. HR awards the worker (after funding, before check-in).
+const asHr = new CofferdamSpotEscrowClient({ address: escrowAddress, signer: hrWallet })
+await asHr.awardWorker(workerAddress)
+
+// 4. The WITNESS attests on site — not the worker, and never the funder
+//    (`setWitness` rejects the funder address on-chain). checkOut()
+//    transfers the full funded amount to the worker in the same tx;
+//    there is no separate settle step.
+const asWitness = new CofferdamSpotEscrowClient({ address: escrowAddress, signer: witnessWallet })
+await asWitness.checkIn(workerAddress)
+await asWitness.checkOut()
 ```
 
-#### Corporate path (recruiter ≠ funder)
-
-Recruiter (HR) drafts an intent; a designated Finance address funds it as a separate tx. The recruiter only pays gas in the draft tx — no ETH movement until Finance signs.
-
-```ts
-// 1. HR drafts (no funds locked)
-const { contractId } = await escrow.postContractIntent(
-  termsHash,
-  amountWei,
-  financeAddress,           // or OPEN_FUNDING for "any bound account may fund"
-)
-
-// 2. Finance funds (separate tx, may come hours/days later)
-const escrowAsFinance = new CofferdamSpotEscrowClient({
-  address: escrow.address,
-  signer:  financeWallet,
-})
-await escrowAsFinance.fundContract(contractId, amountWei)
-```
-
-After funding, both paths converge — `awardContract`, `checkIn`, `checkOut`, and `settle` are identical regardless of which path was used. `settle` carries no value: the escrow contract pays the worker from its locked balance via an internal call, so any signed-in role (or a paymaster keeper) can trigger it.
+Every escape hatch is on `CofferdamSpotEscrowClient` too — `cancel()` before funding, `refund()` (pays the awarded worker `killFeeBps`, rest back to the funder), `reclaimNoShow()` after the check-in timeout, `claimAfterCheckoutTimeout()` (**permissionless**, so the worker self-claims when the witness goes silent), `raiseDispute(reason)` → `resolveDispute(workerAmount)`, and `claimAfterDisputeTimeout()`. `SPOT_ESCROW_RULES.md` §4 maps each to a rule and a real-world scenario.
 
 #### React: picking the funder
 
-`@cofferdam/sdk-react` ships a `useFunderPicker()` hook for the recruiter-side UX of choosing a `designatedFunder`. It owns:
+`@cofferdam/sdk-react` ships a `useFunderPicker()` hook for the recruiter-side UX of choosing the `funder` address that goes into a `SpotEscrowPolicy`. It owns:
 
 - a deduped, ordered candidate list (your `suggestions` + `localStorage`-persisted recent picks)
 - selected-funder state
-- cheap shape-only address validation (the on-chain `onlyBoundAccount` check happens at funding time)
+- cheap shape-only address validation (on-chain validation happens at funding time)
 - a `recordUsage(address, label?)` callback to bump someone to "most recent" after a successful fund tx
 
 ```tsx
 import { useFunderPicker } from '@cofferdam/sdk-react'
-import { CofferdamSpotEscrowClient, OPEN_FUNDING } from '@cofferdam/sdk'
+import { CofferdamEscrowFactoryClient } from '@cofferdam/sdk'
 
-function DraftJobForm({ recruiterWallet, suggestionsFromBackend }) {
+function DraftJobForm({ hrWallet, factoryAddress, policyDefaults, salt, suggestionsFromBackend }) {
   const picker = useFunderPicker({
     suggestions: suggestionsFromBackend,            // [{ address, label }]
     storageKey:  'offshoresync:funders:dispatch',   // optional, scope-namespaced
   })
 
   const onDraft = async () => {
-    const escrow = new CofferdamSpotEscrowClient({ address, signer: recruiterWallet })
-    const { contractId } = await escrow.postContractIntent(
-      termsHash,
-      amountWei,
-      picker.selectedFunder?.address ?? OPEN_FUNDING,
+    const funder = picker.selectedFunder
+    if (!funder) return                             // policy.funder must be non-zero
+
+    const factory = new CofferdamEscrowFactoryClient({
+      address: factoryAddress,
+      signer:  hrWallet,
+    })
+    const { escrowAddress } = await factory.createSpotEscrow(
+      { ...policyDefaults, funder: funder.address },
+      salt,
     )
-    if (picker.selectedFunder) {
-      picker.recordUsage(picker.selectedFunder.address, picker.selectedFunder.label)
-    }
-    // …navigate to contract detail
+    picker.recordUsage(funder.address, funder.label)
+    // …navigate to the escrow detail view for `escrowAddress`
   }
 
   return (
@@ -773,9 +800,12 @@ function DraftJobForm({ recruiterWallet, suggestionsFromBackend }) {
 }
 ```
 
-The hook does **not** verify the picked address is Cofferdam-bound on-chain — the escrow contract enforces that at funding time via `onlyBoundAccount`. If you want a pre-flight UX check ("This address can't fund yet — invite them to Cofferdam first"), call `receiver.isAccountBound(address)` on your `CofferdamReceiver` instance and gate the button accordingly.
+The hook does **not** verify the picked address on-chain — it is shape-only. Role enforcement happens in the contract: `fund()` is funder-only, `awardWorker` / `setWitness` are recruiter-only, `checkIn` / `checkOut` are witness-only. Note there is no "any account may fund" sentinel on the shipped policy — `funder` is **required non-zero**, so the picker cannot be left empty.
 
-A fully-worked three-role demo (recruiter + funder + worker, both posting paths, local + Sepolia) lives in [`examples/capacitor-minimal`](./examples/capacitor-minimal).
+> The three-role demo in [`examples/capacitor-minimal`](./examples/capacitor-minimal)
+> still targets the **α-2 ZKSync stack** and its "both posting paths" flow, which
+> the shipped Base contract does not have. Read the warning at the top of that
+> example before following it; rewriting it is tracked in the root `TODO.md`.
 
 ### 4.8 Development: mock provider and named fixtures
 
@@ -881,6 +911,18 @@ This is the basis for Cofferdam's commercial-security pitch: **structural unlink
 ## 6. OffshoreSync reference integration
 
 The first published integration. Lives at [`examples/offshoresync/`](./examples/offshoresync/) (will mirror the production code in the OffshoreSync repos).
+
+> **Two things to know before copying from this section.**
+>
+> 1. **It is aspirational.** The snippets below call `documents.*`, `messaging.*`,
+>    and `escrow.acceptContract`, which are ⏳ **planned** — see the status table
+>    in [§4.0](#40-implementation-status). Today only sign-in and the escrow
+>    client classes ([§4.7a](#47a-on-chain-escrow--shipped)) actually run.
+> 2. **It is deliberately maritime.** `maritime-certificate`,
+>    `stcw-certificate-v1`, vessel names and crew groups appear here because this
+>    section *is* the OffshoreSync integration. None of it is built into
+>    Cofferdam — every one of those names is a category or label OffshoreSync
+>    registers for its own scope. The generic examples live in §4.4.
 
 ```tsx
 // react-client/src/components/auth/SignInWithCofferdam.tsx

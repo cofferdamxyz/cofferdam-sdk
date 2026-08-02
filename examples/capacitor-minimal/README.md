@@ -179,11 +179,26 @@ Reads `RPC` / `RECEIVER` / `ESCROW` from `.env.local` automatically (falls back 
 
 ### Click through the flow
 
+> [!WARNING]
+> **This walkthrough targets the α-2 ZKSync stack, which has been superseded.**
+> It calls `Escrow.postContractIntent` / `fundContract` / `awardContract` /
+> `settle` against states `Drafted` / `Posted`, and has the **worker** call
+> `checkIn` / `checkOut`. None of those exist in the current
+> `base-contracts/contracts/enterprise/escrow/CofferdamSpotEscrow.sol`, which
+> is USDC-on-Base, deployed one-per-job via `EscrowFactory` CREATE2, uses
+> `Created`/`Funded`/`Active`/`Released`, releases funds inside `checkOut()`
+> with no separate `settle`, and makes `checkIn`/`checkOut` **`onlyWitness`** —
+> the worker never self-attests.
+>
+> The two contracts share a filename, not an ABI. `OffshoreSyncReceiver` is
+> likewise superseded by `NullifierRegistry`. Rewriting this example against
+> the shipped stack is tracked in the root `TODO.md`.
+
 Each click below produces one or more decoded lines in Terminal 4. The `↳ Escrow.X(...)` lines are events; the lead line is the tx + the function it called.
 
 1. Click **Sign in as Recruiter (HR)** → admin EOA pre-funds the user's deterministic address, then `Receiver.bindNullifier(account=…, nullifier=…)` lands. Both visible with `--all`; only the bind shows in default mode.
 2. Click **Sign in as Funder (Finance)** → another pre-fund + bind.
-3. Click **Sign in as Worker (Crew)** → another pre-fund + bind.
+3. Click **Sign in as Worker** → another pre-fund + bind.
 4. Click **1️⃣ Post intent → Finance** → one `Escrow.postContractIntent(termsHash, amount, designatedFunder)` tx. Emits `ContractDrafted(contractId=N, …)`. No funds locked yet.
 5. Click **2️⃣ Fund contract #N** → one `Escrow.fundContract(contractId=N) value=0.1 ETH` tx from the Funder. Emits `ContractFunded` + `ContractPosted`. Funder's balance drops by ~0.1 ETH + gas.
 6. Click **3️⃣ Award worker** → `Escrow.awardContract(contractId=N, workerAccount=…)` from the Recruiter.
