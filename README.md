@@ -170,7 +170,7 @@ For clarity — and so consumer apps can confidently expose these surfaces to un
 
 #### Inline Self prompt UX
 
-When a callsite trigger fires for an unverified user, the SDK does NOT throw an error. It deep-links the user into the Cofferdam app's Self verification flow, runs the NFC passport scan, ships the encrypted passport bytes to the `cofferdam-prover` Cloudflare Container, waits for the v2 `NullifierRegistry.bindNullifier` tx to confirm on Base (single-chain, ~seconds), and *then* completes the original SDK call. From the consumer app's perspective the call simply takes longer the first time; from the user's perspective they get a single, contextual *"Verify to continue with [feature]"* prompt explaining why the verification is needed.
+When a callsite trigger fires for an unverified user, the SDK does NOT throw an error. It deep-links the user into the Cofferdam app's Self verification flow, runs the NFC passport scan (Self.xyz's GCP Confidential Space enclave generates the ZK proof), waits for the `NullifierRegistry.bindNullifier` tx to confirm on Base (single-chain, ~seconds), and *then* completes the original SDK call. From the consumer app's perspective the call simply takes longer the first time; from the user's perspective they get a single, contextual *"Verify to continue with [feature]"* prompt explaining why the verification is needed.
 
 ```ts
 // Consumer-app code is identical whether the user is verified or not:
@@ -379,10 +379,11 @@ const txHash = await cofferdam.escrow.acceptContract({
 })
 
 // Witness attests the worker on site. Both calls are `onlyWitness` in
-// `CofferdamSpotEscrow` — the worker never self-attests, and the witness
-// may not be the funder (enforced on-chain in `setWitness`). Who plays the
+// `CofferdamSpotEscrow` — the worker never self-attests. Who plays the
 // witness is the integrating app's business: a site supervisor, a shift
-// lead, a ship's captain, a clinic manager.
+// lead, a ship's captain, a clinic manager. The witness can be swapped
+// mid-job and may not be the funder unless the escrow is self-witnessed
+// (the consumer shape); see §4.7a for both.
 const txHash = await cofferdam.escrow.checkIn({ escrow: '0x…', worker: '0x…' })
 const txHash = await cofferdam.escrow.checkOut({ escrow: '0x…' })
 ```
@@ -541,7 +542,7 @@ const plaintext = await decrypt(blob, key)
 
 - **Parser config is per scope, not per upload.** You can't change the parser dynamically per-document — register all your categories upfront. This keeps the model-selection + audit surface stable.
 - **`parser: 'none'` is a first-class option.** If your app stores sensitive documents you don't want Workers AI touching (medical, legal, personal), register the category with no parser. Cofferdam stores the encrypted blob + thumbnail with zero plaintext exposure beyond the per-request decrypt step inside the `cofferdam-vault` Worker.
-- **User confirmation is non-negotiable for credentials going on-chain.** Per `cofferdam-app/ARCHITECTURE.md` §4.1.4, the Cofferdam app always surfaces a confirmation review before a parsed credential commits to the Vault. ML output is never silently trusted for a document whose extracted fields end up bound to an on-chain action (escrow milestone, witness delegation, verified-flavor share).
+- **User confirmation is non-negotiable for credentials going on-chain.** Per `cofferdam-app/docs/ARCHITECTURE.md` §4.1.4, the Cofferdam app always surfaces a confirmation review before a parsed credential commits to the Vault. ML output is never silently trusted for a document whose extracted fields end up bound to an on-chain action (escrow milestone, witness delegation, verified-flavor share).
 - **Cross-scope visibility is one-way: the user only.** A document uploaded under your scope is visible only to your scope (via the SDK) AND to the user themselves (via the Cofferdam app's unified Vault). It is *never* visible to any other consumer app's scope.
 - **The Cofferdam app is your free UI option.** Same pattern as messaging (§4.5): you can ship your own document UI on top of the SDK *or* defer entirely to the Cofferdam app via `openInCofferdam`. Both work; pick per-surface.
 
@@ -735,8 +736,9 @@ await asFinance.fund(1_000_000n)
 const asHr = new CofferdamSpotEscrowClient({ address: escrowAddress, signer: hrWallet })
 await asHr.awardWorker(workerAddress)
 
-// 4. The WITNESS attests on site — not the worker, and never the funder
-//    (`setWitness` rejects the funder address on-chain). checkOut()
+// 4. The WITNESS attests on site — not the worker. In a B2B escrow the
+//    funder can never hold this seat (`setWitness` rejects it on-chain);
+//    see "witness rotation" below for the consumer exception. checkOut()
 //    transfers the full funded amount to the worker in the same tx;
 //    there is no separate settle step.
 const asWitness = new CofferdamSpotEscrowClient({ address: escrowAddress, signer: witnessWallet })
@@ -745,6 +747,43 @@ await asWitness.checkOut()
 ```
 
 Every escape hatch is on `CofferdamSpotEscrowClient` too — `cancel()` before funding, `refund()` (pays the awarded worker `killFeeBps`, rest back to the funder), `reclaimNoShow()` after the check-in timeout, `claimAfterCheckoutTimeout()` (**permissionless**, so the worker self-claims when the witness goes silent), `raiseDispute(reason)` → `resolveDispute(workerAmount)`, and `claimAfterDisputeTimeout()`. `SPOT_ESCROW_RULES.md` §4 maps each to a rule and a real-world scenario.
+
+#### Witness rotation, including mid-job
+
+`setWitness` is callable in `Created`, `Funded` **and `Active`** — the witness can be replaced while the worker is already checked in. This is the normal case, not an edge case: a site supervisor rotates off shift, a captain is relieved while five people are still aboard, a hirer is not home to sign off. Authority moves immediately, and the incoming witness can check out a worker the outgoing one checked in.
+
+```ts
+// Supervisor rotates off mid-job. The worker is untouched by this.
+await asHr.setWitness(reliefSupervisorAddress)
+
+const asRelief = new CofferdamSpotEscrowClient({ address: escrowAddress, signer: reliefWallet })
+await asRelief.checkOut()   // pays the worker awarded at step 3
+```
+
+Three properties worth designing around:
+
+- **The swap cannot hurt the worker.** No deadline is reset, so the `checkOutTimeout` protection keeps running from the original check-in. A company cannot buy time by churning witnesses.
+- **A witness can never redirect funds.** `checkOut()` always pays the awarded worker, so the role carries *timing* authority only, never *destination* authority. That is what makes handing it to a stand-in safe.
+- **Every assignment is auditable.** `witnessHistory` records `{witness, assignedBy, timestamp}` per change; `WitnessAssigned` / `WitnessReplaced` events mirror it. Entries cannot be appended after settlement or during a dispute.
+
+Rejected targets: the arbiter, the awarded worker, the checked-in worker, the current witness, and — in B2B — the funder.
+
+#### The consumer shape: `selfWitnessed`
+
+B2B keeps Finance, HR and the on-site supervisor separate. The consumer shape collapses them: one hirer funds the job, drafts it and attests it, because there is no third party to appoint. An escrow created with `funder == witness` is flagged **self-witnessed**, fixed immutably at creation:
+
+```ts
+if (await escrow.isSelfWitnessed()) {
+  // Hirer is away — hand attestation to a partner, neighbour, building manager…
+  await asHirer.setWitness(standInAddress)
+  // …and take it back on return. Only self-witnessed escrows allow this.
+  await asHirer.setWitness(hirerAddress)
+}
+```
+
+Without the flag the funder exclusion would be a trap: a hirer who delegated while away could never resume their own job. It grants no new authority — it preserves a capability the escrow was created with. In a B2B escrow the funder stays permanently barred from attesting, so the party holding the money is never the party certifying the work.
+
+Use `isSelfWitnessed()` to decide whether a hirer-facing UI should offer a *take witness duty back* action.
 
 #### React: picking the funder
 
@@ -846,7 +885,7 @@ Each profile has a stable `mockUserId`, so a given profile's `appPseudonym` and 
 | **Cofferdam mobile app** | Trusted root | Holds the passkey, the master key derivations, the document vault, the messaging keys. This is the security perimeter. |
 | **Device Secure Enclave / StrongBox** | Hardware root | The passkey private key never leaves it. |
 | **Cofferdam backend (Cloudflare)** | Semi-trusted | Sees encrypted blobs, public profile metadata, Bloom filter pointers, audit logs. Cannot decrypt documents or messages. |
-| **Cofferdam prover Worker** | Open-source, auditable | Proof generation runs in `cofferdam-prover` (open source, reproducible build). No TEE required — the Worker is service-binding-only with no public ingress, egress-allowlisted, and stateless. See `IDENTITY_LAYER_DESIGN.md` §5. |
+| **Self.xyz GCP enclave** | External, TEE-attested | Proof generation runs inside Self.xyz's GCP Confidential Space enclave. The Cofferdam attester Worker verifies the enclave's attestation JWT (image digest, debug status) before signing. See `IDENTITY_LAYER_DESIGN.md` §5. |
 
 ### 5.2 Per-consumer-app key scoping
 
@@ -1177,7 +1216,7 @@ The reference integration is the canonical answer to *"how do I use this SDK?"* 
 
 ## 7. Pricing, paymaster, and metering
 
-> The SDK is **free to install, free to ship in your binary, and free to use up to the Tier 0 cap**. Past that cap, your app moves to Tier 2 (per-MAU + metered events) or Tier 3 (enterprise). This section is the consumer-app-facing slice of [`cofferdam-app/ARCHITECTURE.md` §10 — Economics, paymaster, and revenue model](../cofferdam-app/ARCHITECTURE.md#10-economics-paymaster-and-revenue-model), with the SDK-specific callsites that drive billing.
+> The SDK licence is free to install and ship. Hosted Cofferdam services may be free within a contracted Tier 0 cap or billed under Tier 2/3; current prices are pre-GA hypotheses subject to the `../COFFERDAM_REVENUE.md` §2.3 cost gate. This section is the consumer-app-facing slice of [`cofferdam-app/docs/ARCHITECTURE.md` §10 — Economics, paymaster, and revenue model](../cofferdam-app/docs/ARCHITECTURE.md#10-economics-paymaster-and-revenue-model), with candidate SDK billing callsites.
 
 ### 7.1 What you pay for, what you don't
 
@@ -1216,12 +1255,12 @@ This is the canonical mapping from SDK calls to billable units. The SDK reports 
 | `messages.send(...)` | ❌ | — | Free; message volume not metered. |
 | `groups.create({ flavor: 'verified' })` | ✅ | $0.02 / group, once at creation | Plus $0.02 per member who hasn't been in a verified conv before. |
 | `documents.upload({ category, parser: 'none' })` | ❌ | — | Blob storage only; counts toward your storage quota (see §7.5). |
-| `documents.upload({ category })` with parser config | ✅ | $0.02 / doc | Workers AI parse via `@cofferdam/sdk-vault parseDocument` against `@cf/google/gemma-4-26b-a4b-it` by default. Price dropped from $0.10/doc (Gemini Vision era) to $0.02/doc post rev-6; final rate card in `financial/REVENUE_MODEL.md` §8.3. |
+| `documents.upload({ category })` with parser config | candidate | $0.02 / doc hypothesis | Workers AI parse via `@cofferdam/sdk-vault parseDocument`; commercial GA terms live in `../COFFERDAM_REVENUE.md` §2.3 and are not locked by this SDK table. |
 | `documents.requestShare(...)` | ❌ | — | Free; ciphertext re-wrap only. |
 | `documents.openInCofferdam(docId)` | ❌ | — | Free; just a deep link. |
 | `signing.signTransaction(...)` against allowlisted contract | ❌ | — | Gas is paymaster-borne; you are not billed. |
 | `signing.signTransaction(...)` against non-allowlisted contract | ❌ | — | User-pays gas; SDK call is free. Tier 3 can register custom contracts. |
-| `escrow.create({ notional, ... })` | ✅ | flat 0.5% × notional (no cap, rev-7) | Charged on creation; refunded on cancel-before-fund. Legacy $20/escrow cap removed alongside OffshoreSync's $50/contract cap — `financial/REVENUE_MODEL.md` §3.1 + §8.3 rev-7; future §7.6 $COFF staking-discount channel is the high-volume fee-reduction lever. |
+| Eligible escrow funding | planned | 2% pre-TGE; 1% only if the parked program later activates | Cofferdam-owned attribution router; worker principal stays whole. Timing, refunds/reversals, and any 25% partner allocation require live contracts and agreements (`../COFFERDAM_REVENUE.md` §1/§3). |
 | `escrow.release(...)` | ❌ | — | Take rate already collected at create. |
 | `payments.send(...)` (P2P, Cofferdam-to-Cofferdam) | ❌ | — | Subsidized. Gas only. |
 | `payments.offRamp(...)` | ❌ | — | You're not billed; **Cofferdam takes 0.3–0.5% directly from the FX spread**, transparent to the user. Tier 3 can negotiate revenue share. |
@@ -1282,7 +1321,7 @@ Files are deduplicated server-side (CID-keyed), so a shared document only counts
 - **Hard caps optional.** You can set a hard monthly spend cap; when hit, premium features (verified DMs, parsing, escrow) reject with a typed error your app handles gracefully — social messaging, sign-in, and blob Vault keep working.
 - **Public audit log at `audit.cofferdam.xyz`** — every paymaster pool top-up is on-chain and indexed, so you can independently verify your Tier 3 pool's funded balance against your dashboard.
 
-> The platform behind these surfaces (Next.js dashboard, Cloudflare Workers API, Stripe Meter Events pipeline, Safe-multisig treasury, Tier 3 dedicated-paymaster factory) is documented in [`cofferdam-app/ARCHITECTURE.md` §11 — Partners platform](../cofferdam-app/ARCHITECTURE.md#11-partners-platform-dashboard-billing-and-paymaster-operations). As an integrator you don't need to read it — but if you want to know what happens when you click *Top up*, that's where the wiring lives.
+> The platform behind these surfaces (Next.js dashboard, Cloudflare Workers API, Stripe Meter Events pipeline, Safe-multisig treasury, Tier 3 dedicated-paymaster factory) is documented in [`cofferdam-app/docs/ARCHITECTURE.md` §11 — Partners platform](../cofferdam-app/docs/ARCHITECTURE.md#11-partners-platform-dashboard-billing-and-paymaster-operations). As an integrator you don't need to read it — but if you want to know what happens when you click *Top up*, that's where the wiring lives.
 
 ### 7.7 What this means for your sign-in conversion
 
@@ -1294,7 +1333,7 @@ The pricing structure above is designed so that **adding Cofferdam to your app c
 
 This is the contract: **you pay only when Cofferdam delivers irreplaceable B2C value through your app**. Everything else is on us.
 
-> See [`cofferdam-app/ARCHITECTURE.md` §10](../cofferdam-app/ARCHITECTURE.md#10-economics-paymaster-and-revenue-model) for the full revenue model, paymaster pool architecture, and the bounty-funded vs unfunded scenarios that govern the Tier 0 cap.
+> See [`cofferdam-app/docs/ARCHITECTURE.md` §10](../cofferdam-app/docs/ARCHITECTURE.md#10-economics-paymaster-and-revenue-model) for engineering costs/paymaster behavior and `../COFFERDAM_REVENUE.md` for the entity-owned commercial model and funding scenarios.
 
 ---
 
@@ -1348,23 +1387,22 @@ npm install @cofferdam/sdk
 # React hooks + components
 npm install @cofferdam/sdk @cofferdam/sdk-react
 
-# React Native bindings
-npm install @cofferdam/sdk @cofferdam/sdk-react-native
-# (plus the native modules — see RN setup guide)
+# React Native bindings (planned; package not published or present yet)
+# @cofferdam/sdk-react-native will be added demand-first for expo-client
 
-# Web "Sign in with Cofferdam" button + WebAuthn flow
-npm install @cofferdam/sdk @cofferdam/sdk-web
+# Web "Sign in with Cofferdam" button + WebAuthn flow (planned package)
+# @cofferdam/sdk-web is not published or present yet
 ```
 
 Platform support matrix:
 
 | Platform | Status (initial release) | Notes |
 |---|---|---|
-| **iOS native (Swift)** | ✅ via `@cofferdam/sdk-react-native` | Cofferdam mobile app is RN, but native consumer apps can integrate via the SDK's URL scheme. Standalone Swift package planned. |
-| **Android native (Kotlin)** | ✅ via `@cofferdam/sdk-react-native` | Same as iOS — standalone Kotlin package planned. |
-| **React Native (Expo / bare)** | ✅ | First-class. |
-| **Capacitor (the main OffshoreSync app)** | ✅ via `@cofferdam/sdk` + Capacitor URL scheme | Deep-link to Cofferdam mobile app. |
-| **Web (React)** | ✅ via `@cofferdam/sdk-web` + QR handoff | Desktop web → mobile Cofferdam via QR + return-deep-link. |
+| **iOS native (Swift)** | Planned | Standalone Swift package remains future work. |
+| **Android native (Kotlin)** | Planned | Standalone Kotlin package remains future work. |
+| **React Native (Expo / bare)** | In development | `expo-client` is the demand-driving consumer for a new `@cofferdam/sdk-react-native` bridge; `cofferdam-app` currently integrates core directly. |
+| **Capacitor (legacy OffshoreSync client)** | Partial via `@cofferdam/sdk` + URL scheme | Retained only during the Expo strangler migration. |
+| **Web (React)** | Planned package | QR/deep-link handoff is designed, but `@cofferdam/sdk-web` is not present yet. |
 | **Node.js (server-side)** | ✅ via `@cofferdam/sdk/server` | Attestation verification + decryption-key unwrapping. |
 
 ### 8.1 Base native account abstraction (`NativeAccountProvider`)

@@ -16,7 +16,7 @@
 //   3. Check `NullifierRegistry.isAccountBound(account)` to surface whether
 //      the user has been identity-bound on-chain. Actual binding is NOT
 //      performed by this provider — the production path requires a Groth16
-//      proof from the cofferdam-prover Container + an attester signature
+//      proof from Self.xyz's GCP enclave + an attester signature
 //      from the cofferdam-attester Worker, submitted via an ERC-4337
 //      UserOp to `NullifierRegistry.verifyAndBind`. Full flow in
 //      cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3.
@@ -101,7 +101,7 @@ export interface LocalChainProviderConfig {
    * convenience only.
    *
    * On Base, identity binding is NOT performed with this key — the production
-   * path requires a Groth16 proof from the cofferdam-prover Container + an
+   * path requires a Groth16 proof from Self.xyz's GCP enclave + an
    * attester signature from the cofferdam-attester Worker, submitted via an
    * ERC-4337 UserOp to `NullifierRegistry.verifyAndBind`.
    *
@@ -208,7 +208,7 @@ export class LocalChainProvider implements CofferdamProvider {
 
     // ── (2) admin-side: optionally pre-fund the derived account ──────────────
     // Note: identity binding is NOT performed here. On Base, binding requires
-    // a Groth16 proof (cofferdam-prover) + attester signature (cofferdam-attester)
+    // a Groth16 proof (Self.xyz GCP enclave) + attester signature (cofferdam-attester)
     // submitted via an ERC-4337 UserOp to NullifierRegistry.verifyAndBind.
     if (this.config.adminPrivateKey) {
       const adminWallet = new Wallet(this.config.adminPrivateKey, this.chainProvider)

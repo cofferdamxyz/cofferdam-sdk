@@ -45,6 +45,7 @@ export const COFFERDAM_SPOT_ESCROW_ABI = [
   'function claimAfterDisputeTimeout() external',
   // ── reads ────────────────────────────────────────────────────────────
   'function USDC() view returns (address)',
+  'function selfWitnessed() view returns (bool)',
   'function policy() view returns (tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow))',
   'function state() view returns (uint8)',
   'function fundedAmount() view returns (uint256)',
@@ -235,8 +236,24 @@ export class CofferdamSpotEscrowClient {
   }
 
   /**
-   * Recruiter assigns or replaces the witness. Can be called in
-   * Funded or Active state (supervisor rotation).
+   * Recruiter assigns or replaces the witness. Callable in `Created`,
+   * `Funded` or `Active` — including **mid-job**, so a supervisor who rotates
+   * off while the worker is still on site can hand over. Authority moves
+   * immediately: the incoming witness can check out a worker the outgoing one
+   * checked in, and no deadline is affected by the swap. Every assignment is
+   * appended to `witnessHistory`.
+   *
+   * Rejected once the escrow is settled, and while a dispute is open (the
+   * witness counts as a party to a dispute, so swapping would change who has
+   * standing).
+   *
+   * `newWitness` may not be the arbiter, the awarded worker, the checked-in
+   * worker, or the current witness. It may not be the funder either — unless
+   * the escrow is **self-witnessed** (see `isSelfWitnessed`), in which case
+   * the hirer may hand duty to a stand-in and later resume it.
+   *
+   * Note the witness can never redirect funds: `checkOut` always pays the
+   * awarded worker. Delegating this role transfers timing authority only.
    */
   async setWitness(newWitness: string, opts: TxOptions = {}): Promise<TxResult> {
     const sent = await this.contract.setWitness(newWitness)
@@ -330,6 +347,24 @@ export class CofferdamSpotEscrowClient {
   /** USDC token address used by this escrow. */
   async getUSDC(): Promise<string> {
     return (await this.readonlyContract.USDC()) as string
+  }
+
+  /**
+   * True when the escrow was created with `funder == witness` — the consumer
+   * shape, where one hirer pays for and attests the work because there is no
+   * separate on-site supervisor to appoint. Immutable, fixed at creation.
+   *
+   * The only behavioural difference is in `setWitness`: a self-witnessed
+   * escrow's funder may take the witness seat, so a hirer who delegates to a
+   * stand-in while away can resume the role on return. In a B2B escrow the
+   * funder is permanently barred from attesting, keeping Finance separate from
+   * the party certifying the work.
+   *
+   * Useful for deciding whether to offer a "take witness duty back" action in
+   * a hirer-facing UI.
+   */
+  async isSelfWitnessed(): Promise<boolean> {
+    return (await this.readonlyContract.selfWitnessed()) as boolean
   }
 
   /** Escrow policy (funder, recruiter, workerNullifier, timeouts, witness). */

@@ -1,27 +1,25 @@
 # `cofferdam-sdk` Identity Layer — Design (T1.1)
 
 > **Status.** Design spec for `T1.1 — SDK identity layer α-3` per
-> `@/Users/hoff/OffshoreSync/TODO.md`. Written first; implementation
+> `@/Users/hoff/Development/Cofferdam/TODO.md`. Written first; implementation
 > follows this doc.
 >
 > **Identity rail.** The production identity rail is the **v2
 > NullifierRegistry on Base**, attested by a Self prover running in
-> Cofferdam's **own open-source `cofferdam-prover` Worker** — a
-> **Cloudflare Container** with service-binding-only ingress,
-> egress-allowlisted, stateless, and reproducibly built. The Groth16
-> proof is **verified on-chain on Base by Cofferdam itself**; there is
-> no third-party bridge or external verifier anywhere in the path.
-> **No TEE is required** — the prover's security properties come from
-> open-source auditability, reproducible builds, operational hardening
+> **Self.xyz's own GCP Confidential Space enclave**. The Groth16
+> proof is **verified on-chain on Celo by Self.xyz's own contracts**;
+> Cofferdam's attester Worker bridges the result to Base via an
+> EIP-191 signature over `NullifierRegistry.attesterMessageHash`.
+> The attester verifies the GCP attestation JWT (image digest,
+> debug status) before signing. No Cofferdam-side prover is needed.
 > (§5), and the on-chain `SelfAttesterRegistry` kill-switch. A formal
 > TEE-attestation upgrade (AWS Nitro Enclave) remains an **optional**
 > Phase γ hardening, not a dependency. See
-> `@/Users/hoff/OffshoreSync/financial/REVENUE_MODEL.md` §10.1 +
-> §11 for the financial implications of this stack decision.
+> `../COFFERDAM_REVENUE.md` §2.3 + §5 for the financial implications of this stack decision.
 >
 > **Rev-7.1 (2026-06-01) — Enterprise alignment patch.** Extends this
 > doc to cover the **two-tier identity binding** introduced by
-> `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §3.3: a third
+> `@/Users/hoff/Development/Cofferdam/ENTERPRISE_MODULE_PLAN.md` §3.3: a third
 > provider variant — `CofferdamEnterpriseProvider` — bootstraps an
 > AA on ZKSync Era from a Polis SSO session (no Self.xyz on the
 > critical path), and the SDK gains a **post-employment recovery
@@ -84,7 +82,7 @@ one v2 contract deploy**:
 | `@cofferdam/sdk-react-native` (`packages/react-native`) | Native Secure Enclave / StrongBox passkey bridge for the Cofferdam RN app | **NEW** |
 | `@cofferdam/sdk-enterprise` (`packages/enterprise`) | Tenant + KYB + Polis SSO + Safe deploy primitives (vertical-agnostic, scoped under T3 in `ENTERPRISE_MODULE_PLAN.md`) | **NEW** (lifted from OffshoreSync's backend per the SDK-first restructure) |
 | `@cofferdam/sdk-vault` (`packages/vault`) | Workers AI `parseDocument` primitive — consumer brings prompt + schema | **NEW** |
-| Cloudflare Container `cofferdam-prover` | Self.xyz Groth16 prover wrapped in a reproducible-build image | **NEW** |
+| Self.xyz GCP Confidential Space enclave | Self.xyz's own proving infrastructure — Cofferdam does not run a prover | external dependency |
 | `contracts/contracts/v2/self/NullifierRegistry` deploy on Base Sepolia + Base Mainnet | v2 production ingress (replaces the legacy cross-chain bridge path) | deploy of already-audited code |
 
 Phases (executable in roughly the order listed; ranges overlap by
@@ -108,7 +106,7 @@ coordination.
 ## 2. The two providers
 
 The α-1 + α-2 era shipped `MockProvider` and `LocalChainProvider`
-(see `@/Users/hoff/OffshoreSync/cofferdam-sdk/packages/core/src/providers/`). T1.1
+(see `@/Users/hoff/Development/Cofferdam/cofferdam-sdk/packages/core/src/providers/`). T1.1
 adds the production pair that replaces them.
 
 ### 2.1 `CofferdamNativeProvider` — for the Cofferdam React Native app
@@ -125,7 +123,7 @@ on-chain on Base (ERC-4337 account); the passkey is the validator key.
    Base ERC-4337 account factory; deploy the smart account with the
    passkey as the sole initial validator (≤3 passkeys per AA
    enforced on-chain by `CofferdamAccountValidator` per
-   `cofferdam-app/ARCHITECTURE.md` §3.3).
+   `cofferdam-app/docs/ARCHITECTURE.md` §3.3).
 2. **Passkey signing.** Native WebAuthn ceremony (P-256, ES256
    COSE algorithm). Returns a signature compatible with
    `CofferdamAccountValidator.isValidSignature(hash, signature)`.
@@ -138,11 +136,11 @@ on-chain on Base (ERC-4337 account); the passkey is the validator key.
    signed `bindNullifier` tx to v2 `NullifierRegistry` on Base.
 5. **Multi-device follower flow.** Subsequent devices add a
    passkey to the existing AA via the `addPasskey` validator path,
-   gated by an existing-device approval (per `cofferdam-app/ARCHITECTURE.md`
+   gated by an existing-device approval (per `cofferdam-app/docs/ARCHITECTURE.md`
    §3.3 + §3.6).
 
 **Implements.** `CofferdamProvider` from
-`@/Users/hoff/OffshoreSync/cofferdam-sdk/packages/core/src/types.ts`. The interface
+`@/Users/hoff/Development/Cofferdam/cofferdam-sdk/packages/core/src/types.ts`. The interface
 shape is unchanged from α-1; only the implementation behind it is
 real now.
 
@@ -185,7 +183,7 @@ This split also gives us **per-platform paymaster routing** without
 the SDK consumer having to know: the native provider pays through
 the user's own session-bound paymaster envelope; the web provider
 pays through the consumer-app's per-tenant paymaster sub-pool
-(Tier 2/3 per `financial/REVENUE_MODEL.md` §8). Same SDK call;
+(Tier 2/3 per `../COFFERDAM_REVENUE.md` §2). Same SDK call;
 different payer under the hood.
 
 ### 2.4 `CofferdamEnterpriseProvider` — for company-bound enterprise sign-in (rev-7.1)
@@ -250,7 +248,7 @@ against the worker's IdP, not a passkey. This is the
    declare `@selfxyz/mobile-sdk-alpha` as a peer dep.
 
 **Implements.** `CofferdamProvider` from
-`@/Users/hoff/OffshoreSync/cofferdam-sdk/packages/core/src/types.ts`.
+`@/Users/hoff/Development/Cofferdam/cofferdam-sdk/packages/core/src/types.ts`.
 Same interface as native + web; the enterprise variant lives in
 `@cofferdam/sdk-enterprise` per the §1 sub-package list.
 
@@ -340,11 +338,12 @@ Two consequences the implementation MUST honour:
 
 ### 2.6 `CofferdamEmbeddedProvider` — embedded passkey ceremonies in natively-wrapped consumers (2026-07-04)
 
-**Hosts.** Consumer apps that ship a *native shell* around their
-web UI — Capacitor (OffshoreSync `react-client/` iOS + Android)
-first; the same pattern covers any RN / native consumer binary we
-or a partner sign. Pure-browser origins cannot host this provider
-(see the fallback ladder below).
+**Hosts.** Native consumer apps associated with `cofferdam.xyz`.
+The legacy first host is Capacitor (`react-client/`); the active
+OffshoreSync successor is Expo React Native (`expo-client/`). The
+same pattern covers any reviewed native consumer binary we or a
+partner sign. Pure-browser origins cannot host this provider (see
+the fallback ladder below).
 
 **Owns.** No keys — the same zero-custody posture as §2.2. The
 passkey lives in the platform authenticator (iCloud Keychain /
@@ -363,9 +362,10 @@ never satisfy the RP-ID registrable-suffix rule for
 bridge — `ASAuthorizationPlatformPublicKeyCredentialProvider(
 relyingPartyIdentifier: "cofferdam.xyz")` on iOS,
 `androidx.credentials.CredentialManager` (rpId `cofferdam.xyz`)
-on Android — exposed to JS by a NEW `@cofferdam/sdk-capacitor`
-package. The bridge implements the existing
-`WebAuthnAuthenticator` seam
+on Android — exposed to JS by the platform bridge:
+`@cofferdam/sdk-capacitor` for the legacy shell and a demand-driven
+`@cofferdam/sdk-react-native` package for Expo/bare RN. Both bridges
+implement the existing `WebAuthnAuthenticator` seam
 (`packages/core/src/identity/webauthn.ts`), so
 `WebAuthnPasskeySigner`, the `WebAuthnAuth` ABI encoding, and the
 on-chain `WebAuthnPasskeyAuthority` verification are reused
@@ -477,7 +477,7 @@ of these steps.
 │  4. SignInResponse returned to caller — user is now signed in,    │
 │     unverified. Can browse, post, send P2P, use social messaging.│
 │                                                                   │
-│  ── value-gated Self trigger (see cofferdam-app/ARCHITECTURE.md §3.5) ──    │
+│  ── value-gated Self trigger (see cofferdam-app/docs/ARCHITECTURE.md §3.5) ──    │
 │                                                                   │
 │  5. User touches a feature that needs verified identity           │
 │     (verified-flavor DM, contract sign, off-ramp, etc.).          │
@@ -503,13 +503,25 @@ of these steps.
 │         account: AA-x,                                            │
 │         a, b, c: groth16ProofPoints,                              │
 │         pubSignals: uint256[21],  // nullifier = pubSignals[7],   │
-│                                   // userIdentifier = [20] = AA-x │
+│                                   // userIdentifier = [20]        │
+│         userContextData: bytes,   // commitment preimage          │
 │         attesterSig: attesterSignature                            │
 │       )                                                           │
 │     - The nullifier is NOT a separate arg: it is carried inside   │
-│       pubSignals and bound to AA-x via pubSignals[USER_IDENTIFIER]│
-│       == uint160(account). The attester address is RECOVERED from │
+│       pubSignals. The attester address is RECOVERED from          │
 │       attesterSig, not passed.                                    │
+│     - pubSignals[USER_IDENTIFIER] is NOT uint160(account). Self   │
+│       emits a commitment:                                         │
+│         userContextData = abi.encodePacked(                       │
+│           bytes32(SelfApp.chainID), bytes32(userId),              │
+│           userDefinedData)                                        │
+│         userIdentifier  = uint160(ripemd160(sha256(ctx)))         │
+│       so the registry takes userContextData, recomputes the hash, │
+│       and separately checks the embedded userId == account. See   │
+│       calculateUserIdentifierHash in self/common/src/utils/hash.ts│
+│       Consequence: SelfApp.userId MUST be the AA address, and     │
+│       SelfApp.chainID MUST equal selfDestChainId on the registry. │
+│       A UUID userId yields a valid proof that can never bind.     │
 │     - Contract: (a) Groth16 verifier checks proof — REAL check,  │
 │       not a trusted attestation; (b) SelfAttesterRegistry.        │
 │       isAuthorized(attester) check — guarantees attester is       │
@@ -526,12 +538,12 @@ of these steps.
 
 - **No cross-chain hop.** One chain. One bind tx, verified on Base by
   our own contract.
-- **Open-source prover Worker.** `cofferdam-prover` runs as a
-  Cloudflare Container with service-binding-only ingress, egress
-  allowlist, no persistent storage, and a reproducible build. The code
-  is MIT-licensed and auditable. No TEE is required for the current
-  trust model — see §5 for the full hardening parameters and §8 for
-  the optional Phase γ TEE-attestation upgrade path.
+- **Self.xyz enclave proving.** Self.xyz generates ZK proofs inside a
+  GCP Confidential Space enclave. The enclave publishes an RS256
+  attestation JWT that the Cofferdam attester Worker verifies (image
+  digest, debug status) before signing. No Cofferdam-side prover is
+  needed — see §5 for the full hardening parameters and §8 for the
+  TEE-attestation verification path.
 - **Proof is verified on-chain.** Trust in the attester is narrow
   — the attester confirms "yes, I (Cofferdam Cloudflare backend)
   saw a proof come out of my Container that I'm willing to vouch
@@ -790,7 +802,7 @@ new trusted party is introduced.
 │      ↓                                                            │
 │  R6. Recovery complete. AA-x is now under exclusive control of    │
 │      the worker's sovereign identity. They can move the USDC,     │
-│      off-ramp via §3.5 step 3 of cofferdam-app/ARCHITECTURE.md,   │
+│      off-ramp via §3.5 step 3 of cofferdam-app/docs/ARCHITECTURE.md,   │
 │      or hold. The Merkle org tree continues to show AA-x at the   │
 │      worker's former role *as a historical attestation* — that's │
 │      a feature, not a bug; future witness queries return correct │
@@ -1120,14 +1132,7 @@ POST https://prover.cofferdam.xyz/v1/prove
 ### 4.2 Image contents
 
 ```
-cofferdam-prover:1.0.0
-├── /app/
-│   ├── prover                       # Self.xyz prover libs, pinned commit
-│   ├── circuits/                    # Self.xyz circuit artifacts
-│   └── server.js                    # thin HTTP wrapper, ~200 lines
-├── /srs/                            # ← empty; SRS fetched at warm-start
-└── /etc/cofferdam/
-    └── image-manifest.json          # for the reproducible-build receipt (§8)
+(Self.xyz GCP Confidential Space enclave — not a Cofferdam-managed image)
 ```
 
 The SRS (~hundreds of MB) is **not bundled in the image**. It's
@@ -1158,7 +1163,7 @@ ENTRYPOINT ["node", "/app/server.js"]
 ```
 
 The resulting image SHA is recorded in
-`@/Users/hoff/OffshoreSync/cofferdam-sdk/IDENTITY_LAYER_DESIGN.md` (this doc, in
+`@/Users/hoff/Development/Cofferdam/cofferdam-sdk/IDENTITY_LAYER_DESIGN.md` (this doc, in
 the changelog), in the on-chain `SelfAttesterRegistry` metadata
 URI, and in the production deploy manifest. **This image SHA is the
 receipt that Phase γ TEE-attestation upgrade will use** — see §8.
@@ -1271,7 +1276,7 @@ export async function parseDocument<T>(
    returns structured error with the raw output preserved.
 5. Surfaces `tokensIn` / `tokensOut` / `costUsdCents` so Tier 2
    integrators see metered usage line up with
-   `financial/REVENUE_MODEL.md` §8.3.
+   `../COFFERDAM_REVENUE.md` §2.3.
 6. Audit-logs `scope.tenantRef + scope.userRef + scope.documentKind`
    (no PII, no document content, no extracted fields).
 
@@ -1290,8 +1295,8 @@ Module 2.7, Brazilian TICB vs OPITO LB-COX, NR-10/33/34/35, etc.)
 stays in `react-server/services/syncai/geminiService.js` under
 OffshoreSync's existing licence. `syncai` becomes a consumer of
 this SDK primitive — exactly one call swap (see
-`@/Users/hoff/OffshoreSync/STRATEGY.md` §2.3 and the analogous
-abstraction in `@/Users/hoff/OffshoreSync/cofferdam-sdk/IDENTITY_LAYER_DESIGN.md` §6.1
+`@/Users/hoff/Development/Cofferdam/STRATEGY.md` §2.3 and the analogous
+abstraction in `@/Users/hoff/Development/Cofferdam/cofferdam-sdk/IDENTITY_LAYER_DESIGN.md` §6.1
 above):
 
 ```js
@@ -1309,7 +1314,7 @@ Same prompt, same shape, lower cost, edge-local latency.
 
 ## 7. Multi-device reconciliation primitives
 
-Per `@/Users/hoff/OffshoreSync/cofferdam-app/ARCHITECTURE.md` §3.6 — the full
+Per `@/Users/hoff/Development/Cofferdam/cofferdam-app/docs/ARCHITECTURE.md` §3.6 — the full
 engineering spec lives there; this section is the SDK-side
 implementation manifest.
 
@@ -1355,40 +1360,23 @@ boundary.
 
 ### 8.1 The receipt that makes the upgrade clean
 
-Every production-deployed `cofferdam-prover` Container image has a
-**published SHA**. The image SHA is recorded in three places:
+Self.xyz's GCP Confidential Space enclave publishes an RS256 attestation
+JWT containing the image digest (`submods.container.image_digest`) and
+debug status (`dbgstat`). The attester Worker verifies this JWT and
+allowlists the image digest in `wrangler.jsonc` (`SELF_TEE_IMAGE_DIGESTS`).
 
-1. This doc's changelog (immutable history).
-2. The on-chain `SelfAttesterRegistry` metadata URI for the
-   currently-registered attester.
-3. The production deploy manifest at
-   `infra/cloudflare-prover/manifest.json`.
+If Self.xyz upgrades their enclave image, the migration is:
 
-If we later upgrade to formal TEE attestation (Phase γ in
-`@/Users/hoff/OffshoreSync/TODO.md`), the migration is:
-
-1. Build the same `cofferdam-prover` image targeting the new TEE
-   substrate (Cloudflare's confidential-compute primitive if it
-   ships; or AWS Nitro Enclave; or whatever else looks credible
-   then). **The image inputs do not change** — same Self libs, same
-   server, same SRS handling. Only the *substrate* changes. This is
-   a pure operational upgrade with no code or contract changes.
-2. Compute the new image's SHA. Compute the matching attestation
-   chain (PCR whitelist, attestation document signing key, etc.).
-3. Register the new attester via `SelfAttesterRegistry.addAttester(
-   newAttesterAddress, newMetadataURI)`.
-4. Cut traffic over from old attester to new.
-5. After a cooldown window with zero rebinds against the old
-   attester, call `SelfAttesterRegistry.removeAttester(
-   oldAttesterAddress)`.
+1. Capture the new image digest from the attestation JWT on a test
+   run.
+2. Add the new digest to `SELF_TEE_IMAGE_DIGESTS` in
+   `cofferdam-attester/wrangler.jsonc`.
+3. Redeploy the attester Worker.
+4. (Optional) Remove the old digest once no longer needed.
 
 **Nothing on-chain changes besides the attester roster.** Every
 existing bind stays valid (the proofs are still cryptographically
 verified). New binds go through the upgraded path.
-
-This is why we are willing to accept the trust degradation for α/β:
-the migration cost is bounded and pre-paid by the reproducible-
-build discipline we are imposing on the Container image today.
 
 ### 8.2 What we will not promise pre-Phase γ
 
@@ -1415,13 +1403,13 @@ Out-of-scope items, with pointers to where they *are* spec'd:
 
 | Topic | Where |
 |---|---|
-| Recurring escrow contract design (settlePeriod cron, leave-pay accrual) | `@/Users/hoff/OffshoreSync/contracts/contracts/v1/base/RECURRING_ESCROW_DESIGN.md` |
-| Witness delegation registry (industry-agnostic `witnessKind` bytes32) | `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §6.A + §6.B |
-| Per-tenant pseudonym derivation (HKDF-mediated nullifier → per-tenant ID) | `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §5 (enterprise architecture) + `@/Users/hoff/OffshoreSync/STRATEGY.md` §5 (sovereign-vs-enterprise resolution) |
-| Pricing tiers / take rates / TAM | `@/Users/hoff/OffshoreSync/financial/REVENUE_MODEL.md` §8 + §9 + §10 |
-| Strategic vertical-pilot framing | `@/Users/hoff/OffshoreSync/STRATEGY.md` |
-| Companion-app feature surface (messaging, vault, payments) | `@/Users/hoff/OffshoreSync/cofferdam-app/ARCHITECTURE.md` §4 |
-| Phase γ tokenomics (deferred) | `@/Users/hoff/OffshoreSync/financial/REVENUE_MODEL.md` §7.6 + `@/Users/hoff/OffshoreSync/TODO.md` ⚪ Phase γ |
+| Recurring escrow contract design (settlePeriod cron, leave-pay accrual) | `../base-contracts/contracts/enterprise/escrow/CofferdamPayrollEscrow.sol` |
+| Witness delegation registry (industry-agnostic `witnessKind` bytes32) | `@/Users/hoff/Development/Cofferdam/ENTERPRISE_MODULE_PLAN.md` §6.A + §6.B |
+| Per-tenant pseudonym derivation (HKDF-mediated nullifier → per-tenant ID) | `@/Users/hoff/Development/Cofferdam/ENTERPRISE_MODULE_PLAN.md` §5 (enterprise architecture) + `@/Users/hoff/Development/Cofferdam/STRATEGY.md` §5 (sovereign-vs-enterprise resolution) |
+| Pricing tiers / take rates / TAM | `../COFFERDAM_REVENUE.md` §2 + §3 + §4 |
+| Strategic vertical-pilot framing | `@/Users/hoff/Development/Cofferdam/STRATEGY.md` |
+| Companion-app feature surface (messaging, vault, payments) | `@/Users/hoff/Development/Cofferdam/cofferdam-app/docs/ARCHITECTURE.md` §4 |
+| Phase γ tokenomics (deferred) | `../COFFERDAM_REVENUE.md` §7 + `@/Users/hoff/Development/Cofferdam/TODO.md` ⚪ Phase γ |
 
 ## 10. Build + test plan
 
@@ -1444,9 +1432,8 @@ Every primitive added in T1.1 ships with unit tests:
 
 ### 10.2 Integration tests
 
-End-to-end against Base Sepolia + a Cloudflare Container
-deployment of `cofferdam-prover` pointing at a published test
-build:
+End-to-end against Base Sepolia + Self.xyz's GCP Confidential Space
+enclave (test passport):
 
 - Fresh signup → passkey → AA deploy → SignIn returns
   `verified: false`.
@@ -1499,7 +1486,7 @@ breaks in the field.
   mainnet-gating.
 - **2026-06-01 — rev 7.1 alignment patch.** Extends the doc to
   cover the two-tier identity binding introduced by
-  `@/Users/hoff/OffshoreSync/ENTERPRISE_MODULE_PLAN.md` §3.3.
+  `@/Users/hoff/Development/Cofferdam/ENTERPRISE_MODULE_PLAN.md` §3.3.
   Added: §2.4 `CofferdamEnterpriseProvider` (a third provider
   variant whose authority root is a Polis SSO ID-token, not a
   device passkey — used by `react-enterprise/` to bootstrap an
