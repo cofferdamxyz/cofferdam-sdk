@@ -21,14 +21,14 @@ Every SDK change must update in the same PR: client ABI, methods, JSDoc, SDK REA
 
 ## Naming
 
-Cofferdam internals use `Cofferdam*` identifiers, not `OffshoreSync*`. Exceptions: `scope: 'offshoresync'`, references to OffshoreSync-the-product in docs, and the `react-client`/`react-server` consumer repos. Rename ladder is in `.devin/rules/cofferdam-sdk.md`.
+Cofferdam internals use `Cofferdam*` identifiers, not `OffshoreSync*`. Exceptions: `scope: 'offshoresync'`, references to OffshoreSync-the-product in docs, and the `react-client`/`react-server` consumer repos. Rename ladder is in `../rules/cofferdam-sdk.md`.
 
 ## References
 
-- Workspace rules: `AGENTS.md` (workspace root)
-- `.devin/rules/cofferdam-sdk.md`
-- `.devin/rules/cofferdam-identity.md`
-- `.devin/rules/cofferdam-enterprise.md`
-- `.devin/skills/add-cofferdam-sdk-client.md`
-- `.devin/skills/add-cofferdam-escrow-client.md`
-- `.devin/skills/add-cofferdam-spot-escrow.md`
+- Workspace rules: `../AGENTS.md` (Cofferdam workspace) and the cross-entity index one level above
+- `../rules/cofferdam-sdk.md`
+- `../rules/cofferdam-identity.md`
+- `../rules/cofferdam-enterprise.md`
+- `../.claude/skills/add-cofferdam-sdk-client/SKILL.md`
+- `../.claude/skills/add-cofferdam-escrow-client/SKILL.md`
+- `../.claude/skills/add-cofferdam-spot-escrow/SKILL.md`
