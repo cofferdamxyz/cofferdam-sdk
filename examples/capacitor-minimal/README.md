@@ -11,10 +11,10 @@ Two-mode end-to-end integration of [`@cofferdam/sdk-react`](../../packages/react
 
 The whole mock demo is **under 60 lines of TSX** ([`src/App.tsx`](./src/App.tsx) `MockDemo`).
 
-**`local-chain` mode** (α-2) — three-role interactive harness for the Base contracts. Demonstrates:
+**`local-chain` mode** — four-role interactive harness for the Base contracts. Demonstrates:
 
 - `LocalChainProvider` signing three independent roles (recruiter / funder / worker) into the same base-anvil node
-- The full corporate flow on-chain: `postContractIntent → fundContract → awardContract → checkIn → checkOut → settle`
+- The full corporate flow on-chain: `createSpotEscrow → approve + fund → awardWorker → setWitness → checkIn → checkOut` (USDC is released inside `checkOut`; there is no separate settle)
 - Live activity log with tx hashes and status — watch it side-by-side with your node terminal
 
 Implementation: [`src/LocalChainDemo.tsx`](./src/LocalChainDemo.tsx). See [§6 below](#6-local-chain-mode-runbook) for the runbook.
@@ -106,23 +106,26 @@ The SDK's `peerDependencies` declare `@cofferdam/sdk` explicitly so both URLs mu
 | [`index.html`](./index.html) | Vite entry point |
 | [`src/main.tsx`](./src/main.tsx) | React mount |
 | [`src/App.tsx`](./src/App.tsx) | Top-level switcher (mock vs local-chain) + `MockDemo` |
-| [`src/LocalChainDemo.tsx`](./src/LocalChainDemo.tsx) | Three-role on-chain harness (α-2) |
+| [`src/LocalChainDemo.tsx`](./src/LocalChainDemo.tsx) | Four-role on-chain harness (`local-chain` / `sepolia-testnet`) |
 | [`src/index.css`](./src/index.css) | Minimal styling |
 | [`scripts/tail-chain.mjs`](./scripts/tail-chain.mjs) | RPC tx tail — decodes Receiver/Escrow calls + events live (see §6) |
 | [`.env.example`](./.env.example) | Documents all `VITE_*` knobs |
 
 ---
 
-## 6. Local-chain mode runbook
+## 6. Local-chain / Base Sepolia runbook
 
-End-to-end interactive test: sign in three roles, drive the full corporate flow on-chain, watch every tx land.
+End-to-end interactive test of the shipped Base escrow: four roles on one page
+(Recruiter/HR, Funder/Finance, Supervisor witness, Worker) drive a
+`CofferdamSpotEscrow` instance deployed per job through `EscrowFactory`
+(CREATE2), settled in USDC, and you watch every tx land.
 
 ### One-time setup
 
-1. **Install monorepo deps** (top of cofferdam-sdk repo + top of OffshoreSync contracts repo):
+1. **Install deps** (top of `cofferdam-sdk` and top of `base-contracts`):
    ```bash
-   cd cofferdam-sdk && yarn install
-   cd ../contracts  && yarn install
+   cd cofferdam-sdk     && yarn install
+   cd ../base-contracts && yarn install
    ```
 2. **Copy the env file**:
    ```bash
@@ -132,28 +135,23 @@ End-to-end interactive test: sign in three roles, drive the full corporate flow 
 
 ### Each session (4 terminals)
 
-**Terminal 1 — base-anvil node** (from `base-contracts/`):
+**Terminal 1 — base-anvil** — start the local Base node as described in
+`base-contracts/README.md` (Local Node section): it listens on
+`http://127.0.0.1:8545`, chainId `31337`, and forks Base Sepolia by default.
+
+**Terminal 2 — deploy the Base contracts** (from `base-contracts/`):
 ```bash
-yarn anvil
-# anvil is now listening on http://127.0.0.1:8545 (chain 31337).
-# Leave it running. anvil's default output is terse — for a
-# decoded per-tx log, use Terminal 4 below.
+yarn deploy:all:local      # auth modules, factory, paymaster, Self registries
+yarn deploy:escrow:local   # MockUSDC, EscrowFactory, a sample CofferdamSpotEscrow
+# Addresses land in base-contracts/deployments/localhost.json
 ```
 
-**Terminal 2 — deploy the Base contracts** (also from `base-contracts/`):
-```bash
-yarn deploy:local
-# Prints:
-#   CofferdamReceiver deployed at 0xAbCd…
-#   CofferdamSpotEscrow   deployed at 0x1234…
-# Persists the same addresses to contracts/deployments/inMemoryNode.json.
-```
-
-Copy those two addresses into `examples/capacitor-minimal/.env.local`:
+Copy the addresses into `examples/capacitor-minimal/.env.local`:
 ```bash
 VITE_COFFERDAM_NETWORK=local-chain
-VITE_LOCAL_RECEIVER_ADDRESS=0xAbCd…
-VITE_LOCAL_ESCROW_ADDRESS=0x1234…
+VITE_LOCAL_RECEIVER_ADDRESS=<NullifierRegistry>
+VITE_LOCAL_FACTORY_ADDRESS=<EscrowFactory>
+VITE_LOCAL_ESCROW_ADDRESS=<CofferdamSpotEscrow>   # the sample instance
 ```
 
 **Terminal 3 — Vite dev server** (from `cofferdam-sdk/`):
@@ -162,7 +160,7 @@ yarn workspace @cofferdam/example-capacitor-minimal dev:local-chain
 # → http://localhost:5173
 ```
 
-**Terminal 4 — RPC tx tail** (decoded mirror of every Receiver/Escrow call). Optional but strongly recommended: it's the only way to actually see *what's happening* on chain in real time — anvil's stdout is too terse and the in-app activity log only captures escrow actions you fire from the buttons (it misses bind/pre-fund txs).
+**Terminal 4 — RPC tx tail** (decoded mirror of every registry / escrow call). Optional but strongly recommended: it's the only way to actually see *what's happening* on the chain while you click.
 ```bash
 yarn workspace @cofferdam/example-capacitor-minimal tail
 # Backfills the last 50 blocks, then tails new ones with a 10-second
@@ -171,41 +169,24 @@ yarn workspace @cofferdam/example-capacitor-minimal tail
 # Useful flags:
 #   --backfill=500   replay deeper history on startup
 #   --backfill=0     skip backfill entirely
-#   --all            don't filter — print EVERY tx, not just Receiver/Escrow
-#                    (handy for confirming pre-fund transfers from the admin
-#                    EOA → user EOAs during sign-in)
+#   --all            don't filter — print EVERY tx (handy for confirming
+#                    pre-fund transfers from the admin EOA → role EOAs)
 ```
 Reads `RPC` / `RECEIVER` / `ESCROW` from `.env.local` automatically (falls back to `VITE_LOCAL_*` keys). Override at runtime with env: `RECEIVER=0x… ESCROW=0x… yarn workspace @cofferdam/example-capacitor-minimal tail`.
 
 ### Click through the flow
 
-> [!WARNING]
-> **This walkthrough targets the α-2 ZKSync stack, which has been superseded.**
-> It calls `Escrow.postContractIntent` / `fundContract` / `awardContract` /
-> `settle` against states `Drafted` / `Posted`, and has the **worker** call
-> `checkIn` / `checkOut`. None of those exist in the current
-> `base-contracts/contracts/enterprise/escrow/CofferdamSpotEscrow.sol`, which
-> is USDC-on-Base, deployed one-per-job via `EscrowFactory` CREATE2, uses
-> `Created`/`Funded`/`Active`/`Released`, releases funds inside `checkOut()`
-> with no separate `settle`, and makes `checkIn`/`checkOut` **`onlyWitness`** —
-> the worker never self-attests.
->
-> The two contracts share a filename, not an ABI. `OffshoreSyncReceiver` is
-> likewise superseded by `NullifierRegistry`. Rewriting this example against
-> the shipped stack is tracked in the root `TODO.md`.
+Each click produces one or more decoded lines in Terminal 4. The flow mirrors
+the contract's trust model: the **witness** attests, never the worker.
 
-Each click below produces one or more decoded lines in Terminal 4. The `↳ Escrow.X(...)` lines are events; the lead line is the tx + the function it called.
+1. **Sign in** the four roles — the admin EOA pre-funds each role's deterministic address with ETH on first sign-in. (This demo does not bind identities on-chain; that is the app's Self flow.)
+2. **Create Escrow** (HR) → `EscrowFactory.createSpotEscrow(policy, salt)`; the CREATE2 address appears in the log.
+3. **Approve + Fund** (Finance) → `MockUSDC.approve` then `fund()`; state `Funded`.
+4. **Award Worker** (HR) → `awardWorker(worker)`.
+5. **Set Witness** (HR → Supervisor) → `setWitness(supervisor)`; HR remains the fallback witness.
+6. **Check In** (Supervisor) → `checkIn(worker)`; state `Active`. Then **Check Out** (Supervisor) → `checkOut()`: the USDC is released to the worker inside the same tx. There is no separate `settle`.
 
-1. Click **Sign in as Recruiter (HR)** → admin EOA pre-funds the user's deterministic address, then `Receiver.bindNullifier(account=…, nullifier=…)` lands. Both visible with `--all`; only the bind shows in default mode.
-2. Click **Sign in as Funder (Finance)** → another pre-fund + bind.
-3. Click **Sign in as Worker** → another pre-fund + bind.
-4. Click **1️⃣ Post intent → Finance** → one `Escrow.postContractIntent(termsHash, amount, designatedFunder)` tx. Emits `ContractDrafted(contractId=N, …)`. No funds locked yet.
-5. Click **2️⃣ Fund contract #N** → one `Escrow.fundContract(contractId=N) value=0.1 ETH` tx from the Funder. Emits `ContractFunded` + `ContractPosted`. Funder's balance drops by ~0.1 ETH + gas.
-6. Click **3️⃣ Award worker** → `Escrow.awardContract(contractId=N, workerAccount=…)` from the Recruiter.
-7. Click **4️⃣ Check in** then **5️⃣ Check out** → two txs from the Worker (`checkIn` / `checkOut`).
-8. Click **6️⃣ Settle (pay worker)** → `Escrow.settle(contractId=N)`; emits `ContractSettled(contractId=N, worker=…, amount=0.1 ETH)`. Worker's balance grows by 0.1 ETH.
-
-If you'd rather test the α-2 self-funded path instead, click **1️⃣ Post self-funded job** after signing the Recruiter in — that's one tx that posts AND funds in a single call (the original α-2 entry point, preserved for solo operators).
+Escape hatches on the same page: **Reclaim (no-show)** for the funder after the check-in window, and **Raise / Resolve dispute** for the arbiter.
 
 ### Re-running
 
@@ -232,20 +213,14 @@ Deploy contracts to Base Sepolia using `yarn deploy:sepolia` in `base-contracts/
    # → http://localhost:5173 — title says "Cofferdam Sepolia Demo · testnet"
    ```
 
-The page renders the same three-role click-through, but with:
+The page renders the same four-role click-through, but with:
 
 - A `testnet` badge next to the title
-- Receiver / Escrow shown as **clickable explorer links**
+- Registry / Factory / Escrow shown as **clickable explorer links**
 - Every tx hash in the activity log linked to its Sepolia explorer page
-- Demo amounts scaled **100× smaller** (0.001 ETH per job vs 0.1 ETH locally), so a 0.05 ETH faucet stash covers ~25 full demo runs instead of ~2
+- Demo amounts scaled down (MockUSDC is minted freely by `deploy:escrow:sepolia`; only ETH for gas comes from a faucet)
 
-**Admin-key budget guidance.** Each full demo run costs the admin EOA roughly:
-
-- 3 × `bindNullifier` txs on first sign-in (~0.0003 ETH gas each, skipped on repeat sessions because identities are sticky)
-- 3 × pre-fund transfers (0.005 / 0.015 / 0.005 = 0.025 ETH) — also skipped on repeat sessions if the role's deterministic EOA already has balance
-- ~7 × user-EOA txs paid by the role wallets, not by admin (the admin only pre-funds once)
-
-So the **first** run costs admin ~0.026 ETH; subsequent runs against the same role IDs cost ~0 (admin doesn't sign anything). Bump the per-role IDs in `VITE_TESTNET_*_ID` to fork off "fresh users" on demand.
+**Admin-key budget guidance.** A full run costs the admin EOA roughly 0.03 testnet ETH: four pre-fund transfers on first sign-in (skipped on repeat sessions when the role's deterministic EOA already has balance) and nothing else — the role wallets pay their own txs. Top up from any no-signup Base Sepolia faucet (see `.env.example`).
 
 **Tail script auto-detects the mode.** With `VITE_COFFERDAM_NETWORK=sepolia-testnet` in `.env.local`, `yarn tail` reads the `VITE_TESTNET_*` namespace and points at Sepolia RPC automatically. Sepolia blocks are busy — pass `--backfill=0` if you only care about your own new txs:
 
@@ -262,5 +237,5 @@ yarn workspace @cofferdam/example-capacitor-minimal tail --backfill=0
 - **Anvil falls back to a random port** (`Failed to bind to address 0.0.0.0:8545 ... Listening on 0.0.0.0:53426`) → another anvil from a previous session is still running. Same fix as above. Note that re-deploying the contracts is mandatory after this — the addresses in `.env.local` were on the killed node, not the new one.
 - **Tail prints nothing after clicking buttons** → the demo's RPC and the tail's RPC don't match, OR the deployed addresses in `.env.local` don't match what's actually on chain. Sanity check: `yarn workspace @cofferdam/example-capacitor-minimal tail --backfill=4000 --all` — if even with `--all` and a deep backfill you see nothing, your addresses are stale; redeploy and update `.env.local`.
 - **Tail decodes events but shows `selector=0x71f8…` for every call** → you're on an older `tail-chain.mjs` that used `getTransaction()` instead of raw `eth_getTransactionByHash`. Pull latest.
-- **Fund button stays disabled** → the funder must sign in *and* a draft must exist. The button label shows `Fund contract #—` until a draft id is set.
-- **Settle reverts with `NotCheckedOut`** → you skipped check-in / check-out. The buttons are in order top-to-bottom for a reason.
+- **Fund button stays disabled** → the funder must sign in *and* an escrow must have been created (step 2); approve runs before fund.
+- **Check Out reverts** → the supervisor must have been set as witness and `checkIn` must have landed. The buttons are in order top-to-bottom for a reason.

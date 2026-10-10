@@ -21,7 +21,7 @@
 > doc to cover the **two-tier identity binding** introduced by
 > `@/Users/hoff/Development/Cofferdam/ENTERPRISE_MODULE_PLAN.md` §3.3: a third
 > provider variant — `CofferdamEnterpriseProvider` — bootstraps an
-> AA on ZKSync Era from a Polis SSO session (no Self.xyz on the
+> AA on Base from a Polis SSO session (no Self.xyz on the
 > critical path), and the SDK gains a **post-employment recovery
 > ceremony** primitive that lets a worker convert a company-bound
 > AA to sovereign Self-bound *after* their corporate SSO has been
@@ -51,7 +51,7 @@
 > add an attacker passkey. *Managed* low-tier (`PolisSessionAuthority`) is the
 > deliberate exception (IdP-brokered, centrally SCIM-revocable, persists with
 > OR semantics — §2.4 / §3.10). Mirrors the Uniswap in-app-wallet UX but on
-> ZKSync Era native AA + Secure-Enclave passkey instead of Privy MPC, with
+> Base ERC-4337 + Secure-Enclave passkey instead of Privy MPC, with
 > **no seed phrase** (recovery = a second passkey or Self.xyz re-bind).
 
 ## Table of contents
@@ -1530,7 +1530,8 @@ breaks in the field.
   being targeted by the bind tx and which authority module the
   tx installs.
 - **2026-05-30 — rev 1 (initial).** First write of the T1.1
-  design doc. Captures the rev-6 stack decision: v2 on-ZKSync via
+  design doc. Captures the rev-6 stack decision (chain and prover since
+  superseded — `Cofferdam/decisions/0001`, `0004`): v2 via a
   Cloudflare Container Self prover, Workers AI Gemma-4-26B-A4B for
   Vault, no LayerZero on the critical path, no AWS dependency. The
   contracts in `contracts/contracts/v2/self/` already exist and

@@ -706,7 +706,7 @@ const proof = await cofferdam.proofs.request({
 
 The SDK ships typed clients for the two Base escrow contracts: `CofferdamEscrowFactoryClient` (deploys one escrow **per job** via CREATE2) and `CofferdamSpotEscrowClient` (that job's lifecycle). Settlement is **USDC (6dp)**, not ETH. Consumer apps import these instead of re-deriving the ABI.
 
-> **Rewritten 2026-08-02.** This section previously documented the α-2 ZKSync
+> **Rewritten 2026-08-02.** This section previously documented the pre-Base α-2
 > client — `postContract` / `postContractIntent` / `fundContract(contractId)` /
 > `settle`, an `OPEN_FUNDING` sentinel, `hashTerms`, and amounts in wei. None of
 > those exist on the shipped client. Because the *class name* did not change, an
@@ -841,10 +841,8 @@ function DraftJobForm({ hrWallet, factoryAddress, policyDefaults, salt, suggesti
 
 The hook does **not** verify the picked address on-chain — it is shape-only. Role enforcement happens in the contract: `fund()` is funder-only, `awardWorker` / `setWitness` are recruiter-only, `checkIn` / `checkOut` are witness-only. Note there is no "any account may fund" sentinel on the shipped policy — `funder` is **required non-zero**, so the picker cannot be left empty.
 
-> The three-role demo in [`examples/capacitor-minimal`](./examples/capacitor-minimal)
-> still targets the **α-2 ZKSync stack** and its "both posting paths" flow, which
-> the shipped Base contract does not have. Read the warning at the top of that
-> example before following it; rewriting it is tracked in the root `TODO.md`.
+> The four-role demo in [`examples/capacitor-minimal`](./examples/capacitor-minimal)
+> (§6 of its README) drives exactly this flow against base-anvil or Base Sepolia.
 
 ### 4.8 Development: mock provider and named fixtures
 
