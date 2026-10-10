@@ -5,17 +5,17 @@
 > follows this doc.
 >
 > **Identity rail.** The production identity rail is the **v2
-> NullifierRegistry on Base**, attested by a Self prover running in
-> **Self.xyz's own GCP Confidential Space enclave**. The Groth16
-> proof is **verified on-chain on Celo by Self.xyz's own contracts**;
-> Cofferdam's attester Worker bridges the result to Base via an
-> EIP-191 signature over `NullifierRegistry.attesterMessageHash`.
-> The attester verifies the GCP attestation JWT (image digest,
-> debug status) before signing. No Cofferdam-side prover is needed.
-> (§5), and the on-chain `SelfAttesterRegistry` kill-switch. A formal
-> TEE-attestation upgrade (AWS Nitro Enclave) remains an **optional**
-> Phase γ hardening, not a dependency. See
-> `../COFFERDAM_REVENUE.md` §2.3 + §5 for the financial implications of this stack decision.
+> NullifierRegistry on Base**, fed by a `disclose` proof that Self.xyz
+> generates in **its own GCP Confidential Space enclave** and delivers to
+> the Cofferdam plane. `NullifierRegistry.verifyAndBind` verifies the
+> Groth16 proof on Base; Cofferdam's attester Worker signs the bind
+> (EIP-191 over `NullifierRegistry.attesterMessageHash`) only after a
+> read-only **Celo gate** has confirmed the proof's identity-commitment
+> root, OFAC roots and date against Self's own registry
+> (`Cofferdam/decisions/0004`, §4–§5, §8). No Cofferdam-side prover and
+> no enclave measurement exist; the on-chain `SelfAttesterRegistry` is the
+> kill-switch. See `../COFFERDAM_REVENUE.md` §2.3 + §5 for the financial
+> implications of this stack decision.
 >
 > **Rev-7.1 (2026-06-01) — Enterprise alignment patch.** Extends this
 > doc to cover the **two-tier identity binding** introduced by
@@ -59,11 +59,11 @@
 - [1. What ships in T1.1](#1-what-ships-in-t11)
 - [2. The two providers](#2-the-two-providers)
 - [3. The bind flow, end to end](#3-the-bind-flow-end-to-end)
-- [4. Cloudflare Container Self prover — image specification](#4-cloudflare-container-self-prover--image-specification)
-- [5. Privacy-preserving parameters](#5-privacy-preserving-parameters)
+- [4. Self.xyz proving and the Celo gate](#4-selfxyz-proving-and-the-celo-gate)
+- [5. Attester hardening parameters](#5-attester-hardening-parameters)
 - [6. Workers AI `parseDocument` primitive (Vault parser)](#6-workers-ai-parsedocument-primitive-vault-parser)
 - [7. Multi-device reconciliation primitives](#7-multi-device-reconciliation-primitives)
-- [8. Trust model + Phase γ TEE-attestation upgrade path](#8-trust-model--phase-γ-tee-attestation-upgrade-path)
+- [8. Trust model](#8-trust-model)
 - [9. What this doc deliberately does not specify](#9-what-this-doc-deliberately-does-not-specify)
 - [10. Build + test plan](#10-build--test-plan)
 
@@ -129,11 +129,12 @@ on-chain on Base (ERC-4337 account); the passkey is the validator key.
    `CofferdamAccountValidator.isValidSignature(hash, signature)`.
 3. **AA tx submission.** Wraps the signed UserOp + submits via the
    Cofferdam paymaster (sponsored gas).
-4. **Passport prove orchestration.** Coordinates with the
-   Cloudflare Container prover (§4) — the RN app sends the
-   pre-NFC passport handle to the Container endpoint and receives
-   back the Groth16 proof + nullifier; then submits the attester-
-   signed `bindNullifier` tx to v2 `NullifierRegistry` on Base.
+4. **Passport prove orchestration.** Drives the Self.xyz
+   `disclose` proof (§4) — NFC read on device, proving in Self's
+   enclave, proof delivered to `cofferdam-api` on the
+   `cofferdam.xyz` host; then fetches the attester-signed bind
+   bundle and submits `verifyAndBind` to v2 `NullifierRegistry`
+   on Base.
 5. **Multi-device follower flow.** Subsequent devices add a
    passkey to the existing AA via the `addPasskey` validator path,
    gated by an existing-device approval (per `cofferdam-app/docs/ARCHITECTURE.md`
@@ -482,21 +483,27 @@ of these steps.
 │  5. User touches a feature that needs verified identity           │
 │     (verified-flavor DM, contract sign, off-ramp, etc.).          │
 │     ↓                                                             │
-│  6. RN app initiates passport prove:                              │
+│  6. RN app initiates a `disclose` proof (§4):                     │
 │     a. NFC chip-read via @selfxyz/mobile-sdk-alpha.               │
-│     b. Encrypted passport payload posted to                       │
-│        https://prover.cofferdam.xyz/v1/prove (Cloudflare          │
-│        Container endpoint, §4).                                   │
-│     c. Container runs Self.xyz Groth16 prover libs in isolation.  │
-│        Returns: (proof, nullifier, publicInputs).                 │
+│     b. Passport inputs stream over the SDK's attested channel     │
+│        to Self.xyz's GCP Confidential Space enclave, which runs   │
+│        the vc_and_disclose circuit (scope cofferdam-bind-v1,      │
+│        userId = AA-x, destChainID = 42220).                       │
+│     c. Self's relayer POSTs {attestationId, proof, publicSignals, │
+│        userContextData} to the endpoint on the cofferdam.xyz host │
+│        served by cofferdam-api. The phone receives only a         │
+│        success flag (VERIFICATION_COMPLETE).                      │
 │     ↓                                                             │
-│  7. Container posts to a Cloudflare Worker (cofferdam-attester):  │
-│       attest(proof, nullifier, publicInputs, accountAddress)      │
+│  7. cofferdam-api calls cofferdam-attester over a service binding:│
+│       signBind({ registry, account, pubSignals, userContextData })│
 │     - Worker holds the registered SelfAttester key (Cloudflare-   │
-│       managed secret, not exposed to the Container).              │
-│     - Worker signs: bindMessage = (account, nullifier, proof,     │
-│       publicInputs).                                              │
-│     - Returns: { attesterSignature, attesterAddress }.            │
+│       managed secret).                                            │
+│     - Celo gate (read-only eth_call): hub routes E_PASSPORT to    │
+│       the pinned registry; pubSignals[9] is a published root;     │
+│       OFAC roots current; proof date within ±1 day.               │
+│     - Signs attesterMessageHash(chainId, registry, account,       │
+│       pubSignals). Returns { attesterAddress, signature, celo }.  │
+│     - cofferdam-api holds the bind bundle for the app to fetch.   │
 │     ↓                                                             │
 │  8. RN app submits to Base v2 NullifierRegistry:                  │
 │       NullifierRegistry.verifyAndBind(                            │
@@ -538,17 +545,15 @@ of these steps.
 
 - **No cross-chain hop.** One chain. One bind tx, verified on Base by
   our own contract.
-- **Self.xyz enclave proving.** Self.xyz generates ZK proofs inside a
-  GCP Confidential Space enclave. The enclave publishes an RS256
-  attestation JWT that the Cofferdam attester Worker verifies (image
-  digest, debug status) before signing. No Cofferdam-side prover is
-  needed — see §5 for the full hardening parameters and §8 for the
-  TEE-attestation verification path.
+- **Self.xyz enclave proving.** Self.xyz generates the ZK proof inside
+  its GCP Confidential Space enclave and anchors its identity tree and
+  OFAC roots on Celo. No Cofferdam-side prover exists and no enclave
+  measurement is checked — the attester's Celo gate (§4) is what ties
+  the proof to Self's state.
 - **Proof is verified on-chain.** Trust in the attester is narrow
-  — the attester confirms "yes, I (Cofferdam Cloudflare backend)
-  saw a proof come out of my Container that I'm willing to vouch
-  for as freshly-computed." The actual Groth16 validity is checked
-  by `Verifier_vc_and_disclose` on Base.
+  — it confirms "this proof's Merkle root is one Self published, its
+  OFAC roots are current and it is fresh." The actual Groth16 validity
+  is checked by `Verifier_vc_and_disclose` on Base.
 - **Same on-chain semantics as v1.** `IIdentityRegistry`-conforming;
   every consumer that reads `isAccountBound` /
   `accountToNullifier` continues to work unchanged. The escrow
@@ -608,8 +613,8 @@ worker eventually Self-binds (§3.11 below); the difference is purely
 │      Bindings" page, taps "Bind sovereign identity".              │
 │      ↓                                                            │
 │  E6. RN app generates a device passkey (§3 step 2) AND walks      │
-│      through Self.xyz NFC + Container prover + attester           │
-│      (§3 steps 6–8). The Container endpoint is told the bind      │
+│      through Self.xyz NFC + enclave proof + attester Celo gate    │
+│      (§3 steps 6–8). The SelfApp config is told the bind          │
 │      target is an EXISTING AA (AA-x from E3), not a fresh         │
 │      deploy.                                                      │
 │      ↓                                                            │
@@ -1104,98 +1109,88 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
   with their RN-app passkey simply makes one passkey an authority on a second
   AA — that is not a merge. Reconciliation stays off the migration path.
 
-## 4. Cloudflare Container Self prover — image specification
+## 4. Self.xyz proving and the Celo gate
 
-The single piece of new infrastructure. Everything else is contract
-code or SDK code.
+There is no Cofferdam prover. Self.xyz generates every proof inside its own
+GCP Confidential Space enclave; the mobile SDK streams the passport inputs
+over an attested channel and never exposes them to us. What Self anchors on
+Celo — the identity-commitment Merkle tree (`IdentityRegistryImplV1`), the
+three OFAC sparse-Merkle roots, and the hub that maps each attestation type
+to its registry (`IdentityVerificationHubImplV2`) — is the state our bind
+rests on.
 
-### 4.1 What it is
+### 4.1 Why Base alone is not enough
 
-A Docker image, deployed on Cloudflare Containers, that hosts the
-Self.xyz open-source prover library and exposes one HTTP endpoint:
+`NullifierRegistry.verifyAndBind` runs the Groth16 verifier, checks the
+scope, the attestation id and the `userContextData` commitment, and
+enforces one-shot binding. A Groth16 proof, however, only shows "this
+commitment is a leaf of the tree with root R". Nothing on Base can tell
+whether R is a root Self published or a tree an attacker built; a forged
+tree yields a perfectly valid proof over an invented commitment and a fresh
+nullifier. The attester closes that gap off-chain.
 
-```
-POST https://prover.cofferdam.xyz/v1/prove
-  Headers:
-    Authorization: Bearer <session-bound JWT from cofferdam-attester>
-    Content-Type:  application/octet-stream
-  Body:
-    Encrypted passport payload (per Self.xyz mobile-sdk wire format)
-  Returns: 200
-    {
-      "proof": "<groth16 hex>",
-      "nullifier": "<bytes32 hex>",
-      "publicInputs": [...]
-    }
-```
+### 4.2 The gate
 
-### 4.2 Image contents
+Before signing, `cofferdam-attester/src/celoGate.ts` performs read-only
+`eth_call`s against Celo mainnet and refuses on any mismatch:
 
-```
-(Self.xyz GCP Confidential Space enclave — not a Cofferdam-managed image)
-```
+| Check | Celo call | Rejection |
+|---|---|---|
+| Hub still routes E_PASSPORT to the pinned registry | `hub.registry(bytes32(1))` | `CELO_REGISTRY_MISMATCH` |
+| Proof root was published by Self (roots never expire) | `registry.checkIdentityCommitmentRoot(pubSignals[9])` | `CELO_ROOT_UNKNOWN` |
+| Proof used the current or previous OFAC snapshot | `registry.checkOfacRoots(pubSignals[16..18])` | `CELO_OFAC_ROOTS_STALE` |
+| RPC answers for Celo 42220 | `eth_chainId` | `CELO_CHAIN_MISMATCH` |
+| Proof date (`pubSignals[10..15]`) within ±1 day UTC | — | `PROOF_DATE_OUT_OF_WINDOW` |
+| `userContextData` destination chain is Celo 42220 | — | `WRONG_DEST_CHAIN_ID` |
 
-The SRS (~hundreds of MB) is **not bundled in the image**. It's
-fetched from Cloudflare R2 at warm-start under a content-addressed
-key, hash-verified before use. This keeps the image small enough
-for fast cold-start and lets us update the SRS (if Self.xyz ships a
-circuit revision) without rebuilding the image.
+These are the checks `IdentityVerificationHubImplV2._basicVerification`
+runs when a proof is consumed natively on Celo, minus the Groth16 check
+that Base performs. The attester signs over the public signals only, so a
+tampered proof reverts on Base rather than being accepted here.
 
-### 4.3 Reproducible build
+### 4.3 Where the proof travels
 
-The Dockerfile pins every input:
+With `endpointType: 'https'` Self's relayer delivers the finished proof to
+the configured endpoint, not to the phone; the SDK only reports
+`VERIFICATION_COMPLETE`. The endpoint must live on the `cofferdam.xyz`
+host because `expectedScope = Poseidon(host × 'cofferdam-bind-v1')` is
+immutable on the registry (only the host contributes, the path is free).
+`cofferdam-api` receives `{attestationId, proof, publicSignals,
+userContextData}`, calls `signBind`, and holds the resulting bind bundle
+(`a, b, c, pubSignals, userContextData, attesterSig`) for the app to submit
+through its AA account with paymaster sponsorship. The relayer's `b`
+coordinates arrive in snarkjs order and are swapped
+(`[[b₀₁, b₀₀], [b₁₁, b₁₀]]`) before `verifyAndBind`, exactly as
+`SelfBackendVerifier` does.
 
-```dockerfile
-FROM node:22.11.0-bookworm-slim@sha256:<digest>
-RUN apt-get install -y --no-install-recommends \
-    libsodium23=1.0.18-* \
-    && rm -rf /var/lib/apt/lists/*
-COPY package-lock.json /app/
-RUN cd /app && npm ci --omit=dev
-# Self.xyz prover libs — pinned to a known commit
-ARG SELF_LIBS_COMMIT=<sha>
-RUN git clone https://github.com/selfxyz/self-mobile-sdk /tmp/self \
- && cd /tmp/self && git checkout ${SELF_LIBS_COMMIT} \
- && cp -r dist/* /app/prover/
-COPY server.js /app/
-COPY image-manifest.json /etc/cofferdam/
-ENTRYPOINT ["node", "/app/server.js"]
-```
+### 4.4 Pins
 
-The resulting image SHA is recorded in
-`@/Users/hoff/Development/Cofferdam/cofferdam-sdk/IDENTITY_LAYER_DESIGN.md` (this doc, in
-the changelog), in the on-chain `SelfAttesterRegistry` metadata
-URI, and in the production deploy manifest. **This image SHA is the
-receipt that Phase γ TEE-attestation upgrade will use** — see §8.
+`cofferdam-attester/wrangler.jsonc` pins `CELO_RPC_URL`,
+`SELF_CELO_CHAIN_ID = 42220`, `SELF_HUB_ADDRESS`
+(`0xe57F4773bd9c9d8b6Cd70431117d353298B9f5BF`) and
+`SELF_PASSPORT_REGISTRY_ADDRESS`
+(`0x37F5CB8cB1f6B00aa768D8aA99F1A9289802A968`, as `hub.registry(bytes32(1))`
+reports it). They change only when Self migrates contracts; a spike of
+`CELO_REGISTRY_MISMATCH` in `wrangler tail` is that signal. Self's staging
+stack (Celo Sepolia, mock passports) cannot be used with the deployed
+registry because `selfDestChainId = 42220` is immutable.
 
-### 4.4 Runtime configuration on Cloudflare
+## 5. Attester hardening parameters
 
-- **Memory.** 2 GB per instance (Groth16 prove + SRS in RAM).
-- **CPU.** Default Cloudflare Container CPU envelope; one prove ≈
-  5–10 seconds CPU.
-- **Concurrency.** 1 prove per instance per request (no shared
-  state). Cloudflare's autoscaling spawns parallel instances on
-  demand. Scales to zero between proves.
-- **Cold-start tolerance.** ~3–8 seconds for first instance after
-  scale-to-zero; the user already sees a "verifying your
-  passport…" UX in the RN app so latency is human-scale anyway.
-
-## 5. Privacy-preserving parameters
-
-The full list of container hardening constraints. Each is auditable
-post-deploy:
+The attester Worker is the only component that holds the signing key.
+Each parameter is auditable from `cofferdam-attester/wrangler.jsonc` and
+`src/`:
 
 | Parameter | Setting | Rationale |
 |---|---|---|
-| **Persistent storage** | None. Container filesystem is ephemeral. | No proof bytes / no passport data survives across requests. |
-| **Egress allowlist** | (a) Cloudflare R2 public endpoint for SRS fetch (content-addressed, read-only); (b) `cofferdam-attester` Worker over Cloudflare's private network; (c) Base RPC (read-only, for any contract sanity checks). **No other outbound.** | Forbids exfil to Self.xyz hosted relay or any third party; explicit positive allowlist. |
-| **Inbound** | Cloudflare Workers binding only — no public ingress IP. | The HTTP `/v1/prove` endpoint is reached only through the cofferdam-attester Worker; never directly. |
-| **Stdout/stderr** | Disabled in production. Structured error reporting to a separate audit channel; errors carry no PII / no proof bytes / no nullifier. | Defense-in-depth against accidental log capture of sensitive intermediate state. |
-| **Memory hygiene** | Prover process calls `wipe()` on the witness vector + intermediate field-element buffers after each proof. | Standard cryptographic hygiene; mitigates a memory-disclosure bug in CF's substrate. |
-| **Reproducible build** | Locked Dockerfile + pinned Node toolchain + pinned Self libs commit + pinned SRS hash. Image SHA tracked + published. | Open-source auditability: any researcher can reproduce the image and verify the SHA. Also serves as receipt for optional Phase γ TEE-attestation upgrade (§8). |
-| **Stateless** | Multiple parallel instances OK; no shared state, no shared filesystem. | Horizontal scaling without coordination. |
-| **TTL** | Cloudflare's default (scale-to-zero idle timeout). | Idle instances don't sit accumulating state. |
-| **Time-bounded sessions** | Each `/v1/prove` call requires a fresh JWT from cofferdam-attester (60-second TTL). | Prevents replay; binds the prove to a specific signed bind-message. |
+| **Ingress** | `workers_dev: false`, no routes; service binding from `cofferdam-api` only. | Even a compromised API can only call `signBind`; it never sees the key. |
+| **Egress** | Read-only JSON-RPC to Celo (`CELO_RPC_URL`). Nothing else. | The gate's four reads are the Worker's whole network footprint. |
+| **Bindings** | None (no KV/R2/D1/services). | Nothing to exfiltrate the key into. |
+| **Pins** | Base chain id, `NullifierRegistry`, Celo chain id, hub, passport registry — all deploy-time vars; mismatches fail closed. | A mis-pointed RPC or a Self migration refuses rather than signs for the wrong thing. |
+| **Request validation** | 21 well-formed signals, pinned registry, `userContextData` names the account and hashes to signal 20 (`src/bind.ts`). | Fail-fast mirror of the on-chain checks; no network call before it passes. |
+| **Key handling** | `ATTESTER_PRIVATE_KEY` Cloudflare secret, read per request, never logged. Rotation = `SelfAttesterRegistry.addAttester/removeAttester`. | On-chain kill-switch; contract-free rotation. |
+| **Audit log** | One JSON line per sign (`attester.signBind`) and per rejection (`attester.celoGateRejected`): account, registry, nullifier, root, proof date, code. No full `pubSignals`. | Replay auditor reconciles against `NullifierBound` events; revealed-data words never hit logs. |
+| **Tests** | Vitest over the gate, validation and signing with fixtures; `CELO_LIVE=1` runs the gate against forno. | The gate semantics are pinned independently of the network. |
 
 ## 6. Workers AI `parseDocument` primitive (Vault parser)
 
@@ -1337,65 +1332,41 @@ shell**. T1.1 ships the *primitives*; T1.2 wires them into screens.
 This split is intentional — keeps T1.1's scope tight and lets the
 RN app surface evolve independently.
 
-## 8. Trust model + optional Phase γ TEE-attestation upgrade
+## 8. Trust model
 
-The current trust model is **"trust the open-source, reproducibly-built
-Cofferdam Cloudflare backend"**. Concretely:
+What a bind on Base asserts, and who vouches for each part:
 
-- Cofferdam controls a SelfAttester key — registered on-chain in
-  `SelfAttesterRegistry`.
-- The key lives as a Cloudflare-managed secret, accessed only by
-  the `cofferdam-attester` Worker.
-- The Container generates the proof; the Worker signs the bind
-  message; the contract verifies (a) the Groth16 proof is valid
-  and (b) the attester is on the allowlist.
+- **The proof is valid** — `Verifier_vc_and_disclose` on Base, a
+  byte-identical vendoring of Self's verifier. No trust in Cofferdam.
+- **The proof is over Self's identity tree, with current OFAC roots and a
+  fresh date** — the attester's Celo gate (§4), reading Self's own
+  contracts. Trust in Cofferdam is limited to running the gate honestly;
+  the facts it checks are public and anyone can re-run them.
+- **The proof names this account** — `userContextData` commitment, checked
+  by the attester and again on-chain.
+- **One passport, one account** — `NullifierRegistry` reverts on reuse.
+- **Who may vouch** — `SelfAttesterRegistry` allow-list; the registered
+  attester key lives only as a Cloudflare secret inside
+  `cofferdam-attester`.
 
-What we are **not** doing today: producing a cryptographic
-attestation that the proof was generated inside a specific
-hardware-bound TEE. AWS Nitro Enclave + Amazon-root-CA + PCR
-whitelist would give us that; it remains an **optional** Phase γ
-hardening, not a current dependency. The open-source + reproducible
-build + operational hardening posture (§5) is the current trust
-boundary.
+### 8.1 What a compromised attester key could and could not do
 
-### 8.1 The receipt that makes the upgrade clean
+It could sign bind messages for proofs the gate would have refused — a
+proof over a forged tree, or a replayed stale proof. It could **not** forge
+a Groth16 proof, bypass the one-shot nullifier rule, move funds, or bind an
+account whose `userContextData` it cannot produce. Mitigations: quarterly
+and on-incident rotation, `removeAttester` as the on-chain kill-switch,
+and the audit log reconciled against `NullifierBound` events.
 
-Self.xyz's GCP Confidential Space enclave publishes an RS256 attestation
-JWT containing the image digest (`submods.container.image_digest`) and
-debug status (`dbgstat`). The attester Worker verifies this JWT and
-allowlists the image digest in `wrangler.jsonc` (`SELF_TEE_IMAGE_DIGESTS`).
+### 8.2 What we do not promise
 
-If Self.xyz upgrades their enclave image, the migration is:
-
-1. Capture the new image digest from the attestation JWT on a test
-   run.
-2. Add the new digest to `SELF_TEE_IMAGE_DIGESTS` in
-   `cofferdam-attester/wrangler.jsonc`.
-3. Redeploy the attester Worker.
-4. (Optional) Remove the old digest once no longer needed.
-
-**Nothing on-chain changes besides the attester roster.** Every
-existing bind stays valid (the proofs are still cryptographically
-verified). New binds go through the upgraded path.
-
-### 8.2 What we will not promise pre-Phase γ
-
-- Cryptographic guarantee that the proof was generated inside an
-  unmodified Container image (we promise the image *can* be
-  reproduced from the published Dockerfile + pinned inputs, but
-  not that *this specific proof* came from that image).
+- That Self's enclave is unmodified. We do not measure it; we rely on
+  Self's Celo state, which Self's own hub relies on for every native
+  verification. If Self's tree is compromised, every Self integrator is.
 - Resistance to a Cloudflare-internal attacker with access to the
-  attester secret (mitigation: the secret is rotated quarterly +
-  on incident; on-chain `removeAttester` is the kill-switch).
-- Resistance to a Cloudflare-internal attacker with access to the
-  Container substrate itself (this is the gap formal TEE
-  attestation closes).
-
-Pre-Phase γ users get **on-chain verifiable proof of personhood +
-narrow trust in Cofferdam-the-company's operational discipline**.
-Post-Phase γ they get **on-chain verifiable proof of personhood +
-cryptographic proof of execution environment**. We will be explicit
-about which one is live at any given time.
+  attester secret beyond the mitigations above.
+- Financial anonymity. Cofferdam preserves identity unlinkability across
+  consumer apps; the nullifier is public on Base by design.
 
 ## 9. What this doc deliberately does not specify
 
@@ -1466,6 +1437,17 @@ breaks in the field.
 
 ## Change log
 
+- **2026-10-10 — Celo gate replaces the enclave digest allowlist
+  (`Cofferdam/decisions/0004`).** §4 rewritten from a Cloudflare Container
+  prover spec to "Self.xyz proving and the Celo gate": the attester signs
+  only after read-only `eth_call`s confirm the proof's root, OFAC roots and
+  date against Self's registry on Celo; `signBindWithAttestation`,
+  `SELF_TEE_IMAGE_DIGESTS` and the prover-session JWT are gone. §5 is now
+  the attester's hardening table, §8 the trust model without a Phase γ
+  TEE-measurement path. §3 steps 6–7 describe the real proof route: Self's
+  relayer delivers the `disclose` proof to the `cofferdam.xyz` endpoint on
+  `cofferdam-api`, which calls `signBind` and holds the bind bundle for
+  the app. Header status paragraph aligned.
 - **2026-07-04 — Embedded consumer passkey provider (§2.6).**
   Adds `CofferdamEmbeddedProvider` + NEW `@cofferdam/sdk-capacitor`:
   natively-wrapped consumers (Capacitor OffshoreSync first)
