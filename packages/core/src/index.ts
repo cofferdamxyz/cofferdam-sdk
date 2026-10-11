@@ -23,6 +23,16 @@ export {
   type GenesisAuthorityConfig,
 } from './providers/NativeAccountProvider.js'
 export {
+  USER_OPERATION_PATH,
+  UserOpRelayError,
+  buildInitCode,
+  relayUserOperation,
+  serializeUserOperation,
+  type PackedUserOperation,
+  type PackedUserOperationJson,
+  type RelayUserOperationOptions,
+} from './providers/userOpRelay.js'
+export {
   encodeSessionConfig,
   signSessionInner,
   deriveSessionSigner,

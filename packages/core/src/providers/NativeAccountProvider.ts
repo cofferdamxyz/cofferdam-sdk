@@ -21,7 +21,10 @@
 //      CREATE2 `salt` from the user id.
 //   3. Derive the COUNTERFACTUAL account address by calling the factory's
 //      `getAddress` view, so the wallet has an address before it is deployed.
-//   4. Optionally deploy the account now (PoC: via `deployerPrivateKey`).
+//   4. Deploy the account with its first sponsored UserOp: the op carries
+//      `initCode` and the plane's relayer submits it (`relayerUrl`). The PoC
+//      `deployerPrivateKey` path (direct factory call + self-bundling) stays for
+//      local chains and tests.
 //
 // `sendTransaction()` builds an ERC-4337 PackedUserOperation, signs the
 // userOpHash with the passkey, and submits via `EntryPoint.handleOps()`.
@@ -79,6 +82,7 @@ import {
 import { bytesToBase64url } from '../identity/webauthn.js'
 import { signSessionAttestation } from '../identity/sessionAttestation.js'
 import { SignInRejected } from './MockProvider.js'
+import { buildInitCode, relayUserOperation, type PackedUserOperation } from './userOpRelay.js'
 import type {
   AuthorityDescriptor,
   AuthorityKind,
@@ -108,6 +112,16 @@ const FACTORY_ABI = [
   'function getAddress(address initialModule, bytes initialConfig, bytes32 salt) view returns (address)',
   'function deployAccount(address initialModule, bytes initialConfig, bytes32 salt) returns (address)',
 ] as const
+
+/** Encoder for the factory's `deployAccount` (the `initCode` of a first op). */
+const FACTORY_IFACE = new Interface(FACTORY_ABI as unknown as string[])
+
+/**
+ * Extra verification gas for an op that deploys its sender: EntryPoint v0.7
+ * runs the factory inside `verificationGasLimit`. `deployAccount` measured
+ * 1.36M on Base Sepolia (2026-10-11); this leaves headroom for validateUserOp.
+ */
+const DEPLOY_VERIFICATION_GAS = 2_000_000n
 
 /** Minimal account ABI for on-chain authority reads + management self-calls. */
 const ACCOUNT_ABI = [
@@ -260,10 +274,21 @@ export interface NativeAccountProviderConfig {
   genesisAuthority?: GenesisAuthorityConfig
 
   /**
-   * PoC deployer key. Deploying the counterfactual account is a normal tx that
-   * needs gas; this key pays for it (and may fund the paymaster). NEVER ship
-   * this in a client — production deploys via a relayer or the first sponsored
-   * op.
+   * The plane's UserOperation relay (cofferdam-api base URL). Signed ops are
+   * POSTed to `/v1/aa/user-operation`; the relayer submits `handleOps` with
+   * its own funded key and the paymaster refunds it. A not-yet-deployed
+   * account is created by its first op (`initCode`), so no client ever needs
+   * a funded key. This is the production path.
+   */
+  relayerUrl?: string
+
+  /** `fetch` used for the relay (tests inject one). Defaults to global fetch. */
+  fetch?: typeof fetch
+
+  /**
+   * PoC deployer key for local chains and tests: deploys through the factory
+   * directly and self-bundles ops into `handleOps`. NEVER ship this in a
+   * client — production uses `relayerUrl`.
    */
   deployerPrivateKey?: string
 
@@ -309,6 +334,8 @@ interface ResolvedConfig {
   }
   userId: string
   deployerPrivateKey: string | null
+  relayerUrl: string | null
+  fetchImpl: typeof fetch | undefined
   usePaymaster: boolean
   authorityId: number
   autoDeploy: boolean
@@ -366,6 +393,8 @@ export class NativeAccountProvider implements CofferdamProvider {
       },
       userId: config.userId ?? 'native-user-default',
       deployerPrivateKey: config.deployerPrivateKey ?? null,
+      relayerUrl: config.relayerUrl ? config.relayerUrl.replace(/\/+$/, '') : null,
+      fetchImpl: config.fetch,
       usePaymaster: config.usePaymaster ?? Boolean(config.contracts.paymaster),
       authorityId: config.authorityId ?? 0,
       autoDeploy: config.autoDeploy ?? false,
@@ -533,16 +562,23 @@ export class NativeAccountProvider implements CofferdamProvider {
   }
 
   /**
-   * Deploy the counterfactual account via the factory (idempotent). Requires
-   * `deployerPrivateKey`. Returns the account address.
+   * Deploy the counterfactual account (idempotent) and return its address.
+   * With `relayerUrl` the deployment IS the first sponsored UserOp: a no-op
+   * self-call whose `initCode` makes the EntryPoint create the account, paid by
+   * the paymaster. With `deployerPrivateKey` (PoC) the factory is called
+   * directly from that funded key.
    */
   async ensureDeployed(): Promise<string> {
     const addr = await this.getAccountAddress()
     if (await this.isDeployed()) return addr
+    if (this.config.relayerUrl) {
+      await this.sendTransaction({ to: addr, data: '0x' })
+      return addr
+    }
     if (!this.config.deployerPrivateKey) {
       throw new Error(
-        '[cofferdam-sdk] ensureDeployed: no deployerPrivateKey configured. ' +
-          'Deploying the counterfactual account needs a funded signer.',
+        '[cofferdam-sdk] ensureDeployed: configure relayerUrl (the first sponsored op ' +
+          'deploys the account) or deployerPrivateKey (PoC, local chains only).',
       )
     }
     const deployer = new EthWallet(this.config.deployerPrivateKey, new JsonRpcProvider(this.config.rpcUrl))
@@ -559,20 +595,33 @@ export class NativeAccountProvider implements CofferdamProvider {
    * Submit an ERC-4337 UserOperation from the smart account, signed by the
    * passkey authority and, by default, sponsored by the paymaster. The UserOp's
    * callData encodes `account.execute(target, value, data)`, which the EntryPoint
-   * calls after `validateUserOp` succeeds. Auto-deploys the account first if a
-   * deployer key is configured.
+   * calls after `validateUserOp` succeeds. A not-yet-deployed account is
+   * created by this op: with `relayerUrl` the op carries `initCode`; with the
+   * PoC deployer key the factory is called first.
    */
   async sendTransaction(req: NativeTxRequest): Promise<TransactionReceipt> {
     const accountAddress = await this.getAccountAddress()
-    if (!(await this.isDeployed())) {
+    const deployed = await this.isDeployed()
+    const viaRelayer = Boolean(this.config.relayerUrl)
+    if (!deployed && !viaRelayer) {
       if (!this.config.deployerPrivateKey) {
         throw new Error(
-          '[cofferdam-sdk] sendTransaction: account is not deployed and no ' +
-            'deployerPrivateKey is set to deploy it. Call ensureDeployed() first.',
+          '[cofferdam-sdk] sendTransaction: account is not deployed; configure relayerUrl ' +
+            '(the op carries initCode) or deployerPrivateKey (PoC). Call ensureDeployed() first.',
         )
       }
       await this.ensureDeployed()
     }
+    const initCode =
+      !deployed && viaRelayer
+        ? buildInitCode(
+            this.config.contracts.factory,
+            FACTORY_IFACE,
+            this.genesisModule(),
+            await this.bootstrapConfig(),
+            this.salt(),
+          )
+        : '0x'
 
     const usePaymaster = req.usePaymaster ?? this.config.usePaymaster
     const paymaster = this.config.contracts.paymaster
@@ -595,16 +644,16 @@ export class NativeAccountProvider implements CofferdamProvider {
     // ── Pack gas fields for ERC-4337 v0.7 ─────────────────────────────────
     const feeData = await this.chainProvider.getFeeData()
     const gasPrice = feeData.gasPrice ?? 1_000_000_000n
-    const verificationGasLimit = req.gasLimit ?? this.config.defaultGasLimit
     const callGasLimit = req.gasLimit ?? this.config.defaultGasLimit
+    const verificationGasLimit = initCode === '0x' ? callGasLimit : callGasLimit + DEPLOY_VERIFICATION_GAS
     const accountGasLimits = packGasLimits(verificationGasLimit, callGasLimit)
     const gasFees = packGasFees(gasPrice, gasPrice) // priority = base for simplicity
 
     // ── Build the PackedUserOperation ─────────────────────────────────────
-    const userOp = {
+    const userOp: PackedUserOperation = {
       sender: accountAddress,
       nonce,
-      initCode: '0x', // account already deployed (ensured above)
+      initCode,
       callData: executeData,
       accountGasLimits,
       preVerificationGas: 0n,
@@ -627,12 +676,24 @@ export class NativeAccountProvider implements CofferdamProvider {
     const innerSignature = await this.signInner(accountAddress, userOpHash)
     const signature = solidityPacked(['uint256', 'bytes'], [authorityId, innerSignature])
 
-    // ── Set the signature and submit via handleOps ────────────────────────
-    const finalUserOp = { ...userOp, signature }
+    // ── Set the signature and submit ──────────────────────────────────────
+    const finalUserOp: PackedUserOperation = { ...userOp, signature }
 
-    // The deployer (or any funded EOA) submits the bundle to the EntryPoint.
-    // In production, a bundler service handles this; for PoC the deployer key
-    // doubles as the bundler.
+    // Production: the plane's relayer bundles the op (and is refunded by the
+    // paymaster); the client only waits for the receipt.
+    if (this.config.relayerUrl) {
+      const { txHash } = await relayUserOperation({
+        relayerUrl: this.config.relayerUrl,
+        userOp: finalUserOp,
+        entryPoint: this.config.contracts.entryPoint,
+        fetchImpl: this.config.fetchImpl,
+      })
+      const receipt = await this.chainProvider.waitForTransaction(txHash)
+      if (!receipt) throw new Error(`[cofferdam-sdk] sendTransaction: relayed tx ${txHash} was not mined`)
+      return receipt
+    }
+
+    // PoC: the deployer key doubles as the bundler and submits handleOps itself.
     // Create a fresh provider+wallet for the bundler to avoid stale nonce
     // caching when ensureDeployed used the same key via the shared provider.
     const bundlerProvider = new JsonRpcProvider(this.config.rpcUrl)
@@ -641,8 +702,8 @@ export class NativeAccountProvider implements CofferdamProvider {
       : null
     if (!bundler) {
       throw new Error(
-        '[cofferdam-sdk] sendTransaction: no deployerPrivateKey configured. ' +
-          'A funded signer is needed to submit the UserOp bundle to the EntryPoint.',
+        '[cofferdam-sdk] sendTransaction: configure relayerUrl (production) or ' +
+          'deployerPrivateKey (PoC) to submit the UserOp bundle.',
       )
     }
 

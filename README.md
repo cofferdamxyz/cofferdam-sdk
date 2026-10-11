@@ -1417,7 +1417,8 @@ const provider = new NativeAccountProvider({
   chainId: 84532,
   contracts: { factory, passkeyModule, paymaster },
   userId: 'password:alice@acme.com',
-  deployerPrivateKey,            // PoC bundler/deployer; production uses a bundler + CDP paymaster
+  relayerUrl: 'https://api.example.workers.dev', // the plane relays ops; the first op deploys (initCode)
+  // deployerPrivateKey: …,      // PoC only (local chains): direct factory deploy + self-bundling
   usePaymaster: true,
   defaultGasLimit: 1_500_000n,   // per-op verification + call; the 20M default exceeds the testnet block limit (AA95)
   // Web2 bridge: a server-derived session signer becomes the genesis authority
@@ -1429,7 +1430,7 @@ const provider = new NativeAccountProvider({
 })
 
 await provider.signIn({})            // derive counterfactual address (no chain write)
-await provider.ensureDeployed()      // CREATE2 deploy via factory
+await provider.ensureDeployed()      // first sponsored op: a no-op self-call carrying the factory initCode
 await provider.sendTransaction({ to, value, data })   // gasless UserOp via paymaster
 await provider.enrollFirstPasskey({ lane: 'in_browser' }) // one-way ratchet → High-tier passkey
 ```
@@ -1438,6 +1439,7 @@ Gas-sponsorship notes (PoC paymaster):
 
 - `paymasterAndData` packs `[paymaster, verificationGasLimit, paymasterPostOpGasLimit]`. The post-op limit must be **non-zero** — EntryPoint v0.7 calls `postOp{gas: paymasterPostOpGasLimit}(...)`, so `0` reverts (`PostOpReverted`) and rolls back the whole UserOp. The SDK uses `100_000`.
 - `CofferdamPaymaster` is a dev/test stub; production gas sponsorship uses the CDP (ERC-7677) paymaster, where `paymasterAndData` is populated server-side.
+- **Submission (decision 0012).** With `relayerUrl` the signed `PackedUserOperation` is POSTed to the plane's `POST /v1/aa/user-operation` (`serializeUserOperation`: bigints as decimal strings) and the plane's relayer calls `handleOps`, refunded from the paymaster's deposit; the SDK waits for the receipt. A not-yet-deployed account's op carries `initCode` (`buildInitCode`: factory ++ `deployAccount` calldata) with 2M extra verification gas, so `ensureDeployed()` is just that first op. No client holds a funded key; `deployerPrivateKey` remains for local chains and tests.
 
 Both paths are exercised end-to-end on Base Sepolia by the `native-aa-testnet` and `web2-auth-testnet` demo modes in `examples/capacitor-minimal` (see the table above).
 
