@@ -895,7 +895,8 @@ Every consumer app gets a **derived sub-key** (`scopeKey`) — deterministically
 
 ### 5.3 Phishing resistance
 
-- "Sign in with Cofferdam" only works via the **native deep-link to the Cofferdam app** — there is no in-browser password flow that can be phished.
+- "Sign in with Cofferdam" only works via the **native deep-link to the Cofferdam app** or the hosted Cofferdam page `id.cofferdam.xyz` — there is no in-browser password flow that can be phished.
+- Consumer apps never request a High-tier passkey signature. Passkey ceremonies that enrol, change authorities or move value run only in the Cofferdam app or on `id.cofferdam.xyz`, which show the operation before asking for the passkey; consumer apps work on scoped `csa1:` session attestations and hand off any step that moves funds (workspace decision 0016).
 - The Cofferdam app shows the requesting consumer app's name + icon + registered domain prominently before the user approves.
 - Domain verification: consumer apps must register their callback URL with Cofferdam (Apple-style Associated Domains for production). No drive-by sign-in approvals.
 

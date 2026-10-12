@@ -178,7 +178,10 @@ talking to the native provider. *(Refined 2026-07-04 by §2.6: for
 **natively-wrapped, Cofferdam-associated** consumer binaries,
 OS-level domain association does make cross-app `cofferdam.xyz`
 ceremonies possible; the claim above stands for pure-browser
-origins.)*
+origins.)* *(Decision 0016, 2026-10-12: that association is now granted
+only to Cofferdam's own binaries. Consumer apps reach a High ceremony
+through the app (§2.2) or the hosted page `id.cofferdam.xyz`, never
+on their own origin or binary.)*
 
 This split also gives us **per-platform paymaster routing** without
 the SDK consumer having to know: the native provider pays through
@@ -285,7 +288,7 @@ tier of the authority that signed determines what it may do.
 
 | Tier | Authority module | Established by | May sign |
 |---|---|---|---|
-| **High** | device passkey (P-256, Secure Enclave / StrongBox) — `CofferdamAccountValidator` | native passkey ceremony (§2.1) or QR handoff to the RN app (§2.2) | **everything** — value transfer, `addPasskey`/`addAuthority`/`revoke`, contract calls |
+| **High** | device passkey (P-256, Secure Enclave / StrongBox) — `CofferdamAccountValidator` | native passkey ceremony (§2.1), QR handoff to the RN app (§2.2) or the hosted page `id.cofferdam.xyz` — Cofferdam surfaces only (decision 0016) | **everything** — value transfer, `addPasskey`/`addAuthority`/`revoke`, contract calls |
 | **Low — untrusted** | password / social-OAuth session authority | a consumer's local-password or Google/Apple login (§3.12) | **only** enrol the *first* passkey (+ counterfactual deploy); **zero value**; nothing else |
 | **Low — managed** | `PolisSessionAuthority` | enterprise Polis SSO (§2.4 / §3.10) | company-bound ops per `ENTERPRISE_MODULE_PLAN.md` §3.3.2 (never calls to the AA itself); may add a passkey only before the first one exists; persists with OR semantics |
 
@@ -338,6 +341,27 @@ Two consequences the implementation MUST honour:
   at enrolment, not at loss.
 
 ### 2.6 `CofferdamEmbeddedProvider` — embedded passkey ceremonies in natively-wrapped consumers (2026-07-04)
+
+> **Withdrawn for consumer apps by decision 0016 (2026-10-12).** A High
+> passkey can sign any `execute`, and the OS prompt shows only the RP,
+> never the operation, so a consumer binary that can request a High
+> assertion can show "Accept job" while asking for "send all USDC". High
+> ceremonies (enrolment, authority changes, anything that moves value)
+> therefore run only on Cofferdam surfaces: the Cofferdam app and the
+> hosted page `id.cofferdam.xyz` (fallback step 3 below), which shows the
+> operation before asking for the passkey. The association registry lists
+> only Cofferdam's own binaries; consumer apps, OffshoreSync included, get
+> `csa1:` attestations scoped to the app and to pipeline actions (publish,
+> track, accept), checked by the plane, and hand off any step that moves
+> funds. The onboarding payoff below survives through the hosted page. The
+> rest of this section is kept as the record of what was considered; the
+> RP-ID lock and the WebView analysis still hold.
+>
+> **On-chain RP lock (pending).** `WebAuthnPasskeyAuthority` returns
+> `Tier.High` and checks the challenge, type, UP/UV and signature, but not
+> `rpIdHash` or `origin`, so today a passkey for any RP is accepted as
+> High. Decision 0016 pins `rpIdHash == sha256("cofferdam.xyz")`; that
+> contract change waits for the founder's review.
 
 **Hosts.** Native consumer apps associated with `cofferdam.xyz`.
 The legacy first host is Capacitor (`react-client/`); the active
@@ -452,7 +476,7 @@ consumer app as a thin SDK layer:
 | `CofferdamNativeProvider` (§2.1) | Device passkey | Cofferdam RN app | Cofferdam app install |
 | `CofferdamAppProvider` (§2.2) | Deep-link to native | Cofferdam RN app (remote) | Cofferdam app install |
 | `CofferdamEnterpriseProvider` (§2.4) | Polis SSO ID-token | IdP redirect | Employer IdP |
-| `CofferdamEmbeddedProvider` (§2.6) | Device passkey (RP `cofferdam.xyz`) | Consumer's own binary via OS APIs | AASA / assetlinks association |
+| `CofferdamEmbeddedProvider` (§2.6, withdrawn for consumers by decision 0016) | Device passkey (RP `cofferdam.xyz`) | Cofferdam's own binaries only | AASA / assetlinks association |
 
 ## 3. The bind flow, end to end
 
@@ -1064,11 +1088,12 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
 │           (CofferdamAppProvider, §2.2): the hardware-bound,        │
 │           air-gapped Secure-Enclave passkey is the canonical,      │
 │           portable signer.                                        │
-│       (b) OPT-IN per consumer — an in-browser platform-            │
-│           authenticator passkey, first-party origin only (§2.3),   │
-│           accepting that it is origin-bound / non-portable.        │
-│      If hardware is not passkey-capable, or the in-browser passkey │
-│      is not reliable for the use case, lane (a) is mandatory.      │
+│       (b) the hosted page id.cofferdam.xyz (popup / redirect /     │
+│           ASWebAuthenticationSession) when the app is not          │
+│           installed: a real cofferdam.xyz passkey, synced.         │
+│      The consumer-origin in-browser lane is RETIRED (decision      │
+│      0016): a passkey on the consumer's own domain is never a      │
+│      Cofferdam authority.                                          │
 │      ↓                                                            │
 │  C4. In the SAME session, the low-tier authority authorises the    │
 │      first-passkey enrolment + counterfactual deploy in one flow:  │
@@ -1450,6 +1475,18 @@ breaks in the field.
   `replaySafeHash`. The factory redeploy changes counterfactual addresses,
   so the SDK's deployment addresses must be updated afterwards. In §3.10, E7's `addAuthority(SelfNullifierAuthority)` must be
   signed by the worker's passkey once that passkey is on the AA.
+- **2026-10-12 — High ceremonies only on Cofferdam surfaces
+  (`Cofferdam/decisions/0016`).** Consumer apps never request a High
+  passkey assertion: the association registry lists only Cofferdam's own
+  binaries, so §2.6's consumer `CofferdamEmbeddedProvider` is withdrawn,
+  and §3.12 C3(b)'s consumer-origin in-browser lane is replaced by the
+  hosted page `id.cofferdam.xyz`. Consumer apps run job pipelines on
+  scoped `csa1:` attestations and hand off funds-moving steps. Records that
+  `WebAuthnPasskeyAuthority` does not check `rpIdHash` and that pinning it
+  to `cofferdam.xyz` is the pending contract change. The SDK still exposes
+  `SignInPolicy.allowInBrowserPasskey` / the `'in_browser'` lane until the
+  follow-up removes them.
+
 - **2026-10-10 — Celo gate replaces the enclave digest allowlist
   (`Cofferdam/decisions/0004`).** §4 rewritten from a Cloudflare Container
   prover spec to "Self.xyz proving and the Celo gate": the attester signs
