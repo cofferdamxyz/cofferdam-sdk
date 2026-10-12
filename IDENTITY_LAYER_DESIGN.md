@@ -1438,7 +1438,7 @@ breaks in the field.
 ## Change log
 
 - **2026-10-12 — The account enforces the tiers on-chain
-  (`Cofferdam/decisions/0011`).** `CofferdamAccount4337.validateUserOp`
+  (`Cofferdam/decisions/0013`).** `CofferdamAccount4337.validateUserOp`
   now checks each userOp's call data against the signer's tier (§2.5.1):
   untrusted low tier may only enrol the first passkey; managed low tier may
   execute calls to other contracts and add a passkey only until the ratchet
