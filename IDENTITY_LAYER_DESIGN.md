@@ -1445,7 +1445,10 @@ breaks in the field.
   fires; adding any passkey fires the ratchet (§2.5.2). §2.5.1's managed row
   updated. ERC-1271 signatures are now over the account's `replaySafeHash`
   (EIP-712, bound to account and chain), and only high and managed tiers can
-  produce one. In §3.10, E7's `addAuthority(SelfNullifierAuthority)` must be
+  produce one. The SDK has no ERC-1271 path; the app's SIWE signing
+  (`cofferdam-app/src/lib/siwe.ts`) is the one signer, and now signs
+  `replaySafeHash`. The factory redeploy changes counterfactual addresses,
+  so the SDK's deployment addresses must be updated afterwards. In §3.10, E7's `addAuthority(SelfNullifierAuthority)` must be
   signed by the worker's passkey once that passkey is on the AA.
 - **2026-10-10 — Celo gate replaces the enclave digest allowlist
   (`Cofferdam/decisions/0004`).** §4 rewritten from a Cloudflare Container
