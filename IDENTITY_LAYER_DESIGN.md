@@ -287,7 +287,7 @@ tier of the authority that signed determines what it may do.
 |---|---|---|---|
 | **High** | device passkey (P-256, Secure Enclave / StrongBox) — `CofferdamAccountValidator` | native passkey ceremony (§2.1) or QR handoff to the RN app (§2.2) | **everything** — value transfer, `addPasskey`/`addAuthority`/`revoke`, contract calls |
 | **Low — untrusted** | password / social-OAuth session authority | a consumer's local-password or Google/Apple login (§3.12) | **only** enrol the *first* passkey (+ counterfactual deploy); **zero value**; nothing else |
-| **Low — managed** | `PolisSessionAuthority` | enterprise Polis SSO (§2.4 / §3.10) | company-bound ops per `ENTERPRISE_MODULE_PLAN.md` §3.3.2; persists with OR semantics |
+| **Low — managed** | `PolisSessionAuthority` | enterprise Polis SSO (§2.4 / §3.10) | company-bound ops per `ENTERPRISE_MODULE_PLAN.md` §3.3.2 (never calls to the AA itself); may add a passkey only before the first one exists; persists with OR semantics |
 
 #### 2.5.2 The one-way ratchet (untrusted low-tier only)
 
@@ -1437,6 +1437,16 @@ breaks in the field.
 
 ## Change log
 
+- **2026-10-12 — The account enforces the tiers on-chain
+  (`Cofferdam/decisions/0011`).** `CofferdamAccount4337.validateUserOp`
+  now checks each userOp's call data against the signer's tier (§2.5.1):
+  untrusted low tier may only enrol the first passkey; managed low tier may
+  execute calls to other contracts and add a passkey only until the ratchet
+  fires; adding any passkey fires the ratchet (§2.5.2). §2.5.1's managed row
+  updated. ERC-1271 signatures are now over the account's `replaySafeHash`
+  (EIP-712, bound to account and chain), and only high and managed tiers can
+  produce one. In §3.10, E7's `addAuthority(SelfNullifierAuthority)` must be
+  signed by the worker's passkey once that passkey is on the AA.
 - **2026-10-10 — Celo gate replaces the enclave digest allowlist
   (`Cofferdam/decisions/0004`).** §4 rewritten from a Cloudflare Container
   prover spec to "Self.xyz proving and the Celo gate": the attester signs
