@@ -178,7 +178,10 @@ talking to the native provider. *(Refined 2026-07-04 by §2.6: for
 **natively-wrapped, Cofferdam-associated** consumer binaries,
 OS-level domain association does make cross-app `cofferdam.xyz`
 ceremonies possible; the claim above stands for pure-browser
-origins.)*
+origins.)* *(Decision 0016, 2026-10-12: that association is now granted
+only to Cofferdam's own binaries. Consumer apps reach a High ceremony
+through the app (§2.2) or the hosted page `id.cofferdam.xyz`, never
+on their own origin or binary.)*
 
 This split also gives us **per-platform paymaster routing** without
 the SDK consumer having to know: the native provider pays through
@@ -285,11 +288,14 @@ tier of the authority that signed determines what it may do.
 
 | Tier | Authority module | Established by | May sign |
 |---|---|---|---|
-| **High** | device passkey (P-256, Secure Enclave / StrongBox) — `CofferdamAccountValidator` | native passkey ceremony (§2.1) or QR handoff to the RN app (§2.2) | **everything** — value transfer, `addPasskey`/`addAuthority`/`revoke`, contract calls |
-| **Low — untrusted** | password / social-OAuth session authority | a consumer's local-password or Google/Apple login (§3.12) | **only** enrol the *first* passkey (+ counterfactual deploy); **zero value**; nothing else |
+| **High** | `cofferdam.xyz` device passkey (P-256, Secure Enclave / StrongBox, `rpIdHash` pinned) | native passkey ceremony (§2.1), QR handoff to the RN app (§2.2) or the hosted page `id.cofferdam.xyz`; on a Partner or Managed account, through the co-signed `enrollFirstHigh` (§2.5.4) | **everything** — value transfer, `addPasskey`/`addAuthority`/`revoke`, contract calls |
+| **Partner** (decision 0016) | the user's passkey on the partner's own RP — `PartnerPasskeyAuthority` | at genesis inside the partner app (§3.12), or granted later by High on a Cofferdam surface (§2.5.4) | **only** the partner's allowlisted job-pipeline calls (publish, track, accept); zero value; no authority changes; no ERC-1271; may sign the co-signed first-High enrolment |
+| ~~Low — untrusted~~ | retired by decision 0016 | a password / social login is the partner's app session and stays off-chain | — |
 | **Low — managed** | `PolisSessionAuthority` | enterprise Polis SSO (§2.4 / §3.10) | company-bound ops per `ENTERPRISE_MODULE_PLAN.md` §3.3.2 (never calls to the AA itself); may add a passkey only before the first one exists; persists with OR semantics |
 
 #### 2.5.2 The one-way ratchet (untrusted low-tier only)
+
+> **Decision 0016 (2026-10-13):** the untrusted low tier no longer exists on-chain, so this ratchet reduces to its result: once the first High exists, only High may add or remove authorities. The text below is kept as the record of the model it replaced. For how a Partner or Managed account reaches its first High, see §2.5.4.
 
 For an **untrusted** low-tier authority — a leakable credential — the upgrade
 path is a **one-way ratchet**, enforced in the AA validator:
@@ -337,7 +343,103 @@ Two consequences the implementation MUST honour:
   `ENTERPRISE_MODULE_PLAN.md` §3.3.4 already acknowledges. State this honestly
   at enrolment, not at loss.
 
+#### 2.5.4 The Partner tier and the co-signed first High (decision 0016, adopted 2026-10-13)
+
+Every consumer app is a **partner**, OffshoreSync included. A partner never
+requests a High (`cofferdam.xyz`) assertion: a High passkey can sign any
+`execute`, and the OS prompt shows the RP, never the operation, so a partner
+able to request one could show "Accept job" while asking for "send all USDC".
+What partners need is for users to publish, track and accept job pipelines
+inside the partner app, with no Cofferdam install at sign-up. So:
+
+- **Credential.** An ordinary passkey on the partner's own RP (for example
+  `offshoresync.com`), created by the partner app with its own platform
+  APIs or `navigator.credentials`. Never a key the partner's server holds.
+- **Module.** `PartnerPasskeyAuthority`, `Tier.Partner` (appended to the
+  enum). Config `(qx, qy, rpIdHash, partnerId, permissionHash)`: the module
+  checks the WebAuthn assertion and that `rpIdHash` matches the partner's RP,
+  so a partner key can never pass as High.
+- **Genesis.** The account may start with Partner at id 0, counterfactual,
+  deploying with its first sponsored op (decision 0012). The partner picks
+  `SignInPolicy.genesis: 'partner'` (default) or `'high'`;
+  `enforceSelfBeforeAccount` implies High at creation, since the Self bind
+  is signed by the passkey in the Cofferdam app.
+- **Call policy** (on the account, extending `_checkCallPolicy`): a
+  permission `{targets[], selectors[], valueCap: 0, expiry}` hashed into the
+  config; `execute`/`executeBatch` only to those pairs; never the account
+  itself; never token `transfer`/`approve`; no `addAuthority`/
+  `revokeAuthority`. ERC-1271 rejects Partner signatures (a 1271 signature
+  could authorise a Permit/Permit2 token pull). Money that reaches a
+  Partner-only account stays there until High exists.
+- **The first High.** On demand (a withdrawal, a Self bind, a device add),
+  on `id.cofferdam.xyz` or in the app. `enrollFirstHigh` needs three
+  signatures in one op: the Partner or Managed authority signs the op; the
+  new passkey proves possession and RP with an assertion over
+  `(account, chainId, nonce)` with `rpIdHash == sha256("cofferdam.xyz")` and
+  UV; and a **Cofferdam ceremony attestation** from a key in
+  `CofferdamCeremonyAttesterRegistry` (the `SelfAttesterRegistry` shape:
+  owner the Cofferdam Safe, add/remove, key in a service-binding-only
+  Worker) over `(chainId, account, action, newKey, partnerId, nonce,
+  notBefore, expiry)`. The plane signs only inside a ceremony opened for that
+  account (the partner's `csa1:` token, the registered return URI or
+  associated domain, the WebAuthn create on the `cofferdam.xyz` origin in
+  the same session). No account function accepts the attestation alone; it
+  is single-use; once High exists, authority changes are High-only and the
+  attester has no path into the account. A partner cannot reach High without
+  Cofferdam, and Cofferdam cannot reach High without the partner and the
+  user's device.
+- **Recovery before High** uses the partner's own flow (Google login, email
+  reset): a recovery bundle (partner backend attestation from a registered
+  `partnerId → key`, the new partner-RP passkey's assertion, the Cofferdam
+  co-sign) calls `replacePartnerAuthority`; `validateUserOp` accepts the
+  bundle only while no High exists. Managed recovery is the employer's SSO
+  re-login (the bridge key is server-held). After High exists, partner
+  recovery can at most re-key Partner, and that is High-only.
+- **72-hour cooldown.** A first-High enrolment after a recovery carries
+  `notBefore = recoveredAt + 72h`, enforced by the contract; the plane emails
+  the user and the partner app offers "this wasn't me", which revokes the new
+  Partner key through the same recovery path. This is the control for a
+  takeover of the user's partner login. Partners may **not** gate withdrawals
+  on a Self bind or a balance: that would let a partner decide when its users
+  may take their own money.
+- **Grant and revoke later.** On an account that started High, a High passkey
+  adds the Partner authority on a Cofferdam surface ("Allow OffshoreSync to
+  manage your jobs") and can revoke it at any time. Partner is hardware-bound
+  and coexists with High.
+- **Sessions.** The same key signs that partner's `csa1:` attestations; `csa1:`
+  v2 adds audience, `actions[]`, expiry and `authorityId`, and the verifier
+  confirms the key is an active authority on the account.
+- **Funds.** Withdrawals, escrow funding and payouts to outside addresses are
+  High, on the Cofferdam app or `id.cofferdam.xyz`.
+
+Open for the implementation pass: whether the permission is hashed into each
+account's grant (preferred) or kept in a Cofferdam registry; the default
+Partner expiry (90 days proposed); whether Managed keeps ERC-1271 for payroll
+Permits; which job-contract functions are safe to allowlist.
+
 ### 2.6 `CofferdamEmbeddedProvider` — embedded passkey ceremonies in natively-wrapped consumers (2026-07-04)
+
+> **Withdrawn for consumer apps by decision 0016 (2026-10-12, revised 2026-10-13).** A High
+> passkey can sign any `execute`, and the OS prompt shows only the RP,
+> never the operation, so a consumer binary that can request a High
+> assertion can show "Accept job" while asking for "send all USDC". High
+> ceremonies (enrolment, authority changes, anything that moves value)
+> therefore run only on Cofferdam surfaces: the Cofferdam app and the
+> hosted page `id.cofferdam.xyz` (fallback step 3 below), which shows the
+> operation before asking for the passkey. The association registry lists
+> only Cofferdam's own binaries. Every consumer app, OffshoreSync
+> included, is a partner: its users' accounts start with a scoped
+> **Partner** authority on the partner's own RP (§2.5.4), reach High
+> through the co-signed enrolment on a Cofferdam surface, and hand off
+> any step that moves funds. The onboarding payoff below survives through the hosted page. The
+> rest of this section is kept as the record of what was considered; the
+> RP-ID lock and the WebView analysis still hold.
+>
+> **On-chain RP lock (pending).** `WebAuthnPasskeyAuthority` returns
+> `Tier.High` and checks the challenge, type, UP/UV and signature, but not
+> `rpIdHash` or `origin`, so today a passkey for any RP is accepted as
+> High. Decision 0016 pins `rpIdHash == sha256("cofferdam.xyz")`; that
+> contract change waits for the founder's review.
 
 **Hosts.** Native consumer apps associated with `cofferdam.xyz`.
 The legacy first host is Capacitor (`react-client/`); the active
@@ -452,7 +554,7 @@ consumer app as a thin SDK layer:
 | `CofferdamNativeProvider` (§2.1) | Device passkey | Cofferdam RN app | Cofferdam app install |
 | `CofferdamAppProvider` (§2.2) | Deep-link to native | Cofferdam RN app (remote) | Cofferdam app install |
 | `CofferdamEnterpriseProvider` (§2.4) | Polis SSO ID-token | IdP redirect | Employer IdP |
-| `CofferdamEmbeddedProvider` (§2.6) | Device passkey (RP `cofferdam.xyz`) | Consumer's own binary via OS APIs | AASA / assetlinks association |
+| `CofferdamEmbeddedProvider` (§2.6, withdrawn for consumers by decision 0016) | Device passkey (RP `cofferdam.xyz`) | Cofferdam's own binaries only | AASA / assetlinks association |
 
 ## 3. The bind flow, end to end
 
@@ -1038,7 +1140,8 @@ Tier-1 reference — that today authenticates users by **local password** or
 **Google/Apple OAuth** (`react-server/routes/auth.js`) and is wiring the SDK
 for account deployment. The whole point of passkeys is to remove a leakable
 shared secret from the database, so this flow converts those old-style logins
-into a **high-tier device passkey on an AA**, under the §2.5 ratchet.
+into an AA guarded first by a **Partner** passkey and, on demand, by a
+**high-tier `cofferdam.xyz` passkey** (§2.5.4, decision 0016).
 
 The UX target is the Uniswap in-app-wallet model (secure a wallet in a few
 taps with FaceID/TouchID/passkey; attach more login methods later) — but on
@@ -1052,32 +1155,30 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
 │      'google', 'apple'}; wallet.migrationStatus = 'pending'        │
 │      (WEB3_CONVERSION.md §5.4).                                    │
 │      ↓                                                            │
-│  C2. SDK signIn() finds no AA for this user. It does NOT deploy    │
-│      yet — the AA stays COUNTERFACTUAL (no funds, no on-chain      │
-│      authority) so a leaked credential has nothing to attack       │
-│      during the pending window. (Contrast §3.10 E3, where the      │
-│      employer-funded AA deploys early under the centrally-          │
-│      revocable PolisSessionAuthority.)                            │
+│  C2. SDK signIn() finds no AA for this user. The partner app      │
+│      creates a passkey on ITS OWN RP (e.g. offshoresync.com) on    │
+│      the user's device; the AA is counterfactual with that key as  │
+│      the PARTNER authority at id 0 (§2.5.4) and deploys with its   │
+│      first sponsored op (decision 0012). No Cofferdam install, no  │
+│      Cofferdam page. Partner signs job-pipeline calls and csa1:    │
+│      tokens only; funds that arrive stay put until High exists.    │
+│      (Partners that set enforceSelfBeforeAccount or                 │
+│      genesis: 'high' go straight to C3 instead.)                    │
 │      ↓                                                            │
-│  C3. SDK offers the passkey upgrade, picking a lane by capability: │
-│       (a) DEFAULT — QR handoff to the Cofferdam RN app             │
-│           (CofferdamAppProvider, §2.2): the hardware-bound,        │
-│           air-gapped Secure-Enclave passkey is the canonical,      │
-│           portable signer.                                        │
-│       (b) OPT-IN per consumer — an in-browser platform-            │
-│           authenticator passkey, first-party origin only (§2.3),   │
-│           accepting that it is origin-bound / non-portable.        │
-│      If hardware is not passkey-capable, or the in-browser passkey │
-│      is not reliable for the use case, lane (a) is mandatory.      │
+│  C3. ON DEMAND (first withdrawal, Self bind, device add) the SDK   │
+│      opens a Cofferdam surface for the High upgrade:              │
+│       (a) QR handoff to the Cofferdam RN app                       │
+│           (CofferdamAppProvider, §2.2);                            │
+│       (b) the hosted page id.cofferdam.xyz (popup / redirect /     │
+│           ASWebAuthenticationSession) when the app is not          │
+│           installed. Either creates a real cofferdam.xyz passkey.  │
+│      A passkey on the partner's own domain is never High.          │
 │      ↓                                                            │
-│  C4. In the SAME session, the low-tier authority authorises the    │
-│      first-passkey enrolment + counterfactual deploy in one flow:  │
-│        deploy({ validator: CofferdamAccountValidator,          │
-│                 bootstrap:  <password | oauth session authority>,  │
-│                 initialPasskey: <P-256 pubkey> })                 │
-│      The validator registers the passkey as HIGH tier and fires    │
-│      the §2.5.2 ratchet: the low-tier authority is permanently     │
-│      locked out of add/remove-authority.                          │
+│  C4. enrollFirstHigh: ONE op carrying the Partner signature, the   │
+│      new cofferdam.xyz passkey's assertion (rpIdHash pinned, UV)   │
+│      and the Cofferdam ceremony attestation (nonce, notBefore,     │
+│      expiry). After a partner-flow recovery notBefore is +72h and  │
+│      the user is emailed. From here only High manages authorities. │
 │      ↓                                                            │
 │  C5. SDK prompts a BACKUP (§2.5.3): add a second device passkey    │
 │      and/or bind Self.xyz. Without it a single-device user has no  │
@@ -1092,9 +1193,10 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
 
 **Properties of this flow:**
 
-- **Counterfactual until the high-tier key exists.** The window in which only
-  an untrusted low-tier authority guards the AA collapses to the single
-  enrolment session; there is nothing fundable to steal before then.
+- **Nothing a partner holds can move funds.** The AA is guarded by the
+  user's own partner-RP passkey with zero-value powers until High exists; a
+  compromised partner server cannot sign for the account at all, and cannot
+  enrol a High key without the Cofferdam ceremony attestation.
 - **Per-user and resumable.** `wallet.migrationStatus` (`pending` →
   `enrolled` | `declined`) drives the WEB3_CONVERSION §7 release ladder. A
   `pending`/`declined` user keeps a counterfactual AA and is re-prompted; any
@@ -1450,6 +1552,20 @@ breaks in the field.
   `replaySafeHash`. The factory redeploy changes counterfactual addresses,
   so the SDK's deployment addresses must be updated afterwards. In §3.10, E7's `addAuthority(SelfNullifierAuthority)` must be
   signed by the worker's passkey once that passkey is on the AA.
+- **2026-10-12 / 2026-10-13 — Partner-first accounts, co-signed first High
+  (`Cofferdam/decisions/0016`).** Every consumer app is a partner,
+  OffshoreSync included. §2.5.1 gains the **Partner** tier (the user's own
+  passkey on the partner's RP, allowlisted job calls, zero value, no
+  ERC-1271) and retires the untrusted low tier; §2.5.2 is kept as record;
+  new §2.5.4 specifies Partner genesis, the three-signature
+  `enrollFirstHigh` (Partner or Managed signer, new `cofferdam.xyz` passkey
+  with `rpIdHash` pinned, Cofferdam ceremony attestation from a
+  `SelfAttesterRegistry`-shaped registry), recovery through the partner's
+  own flows while no High exists, and the 72-hour post-recovery cooldown
+  with email. §2.6's consumer `CofferdamEmbeddedProvider` is withdrawn;
+  §3.12 C2–C4 rewritten. The SDK's `GenesisAuthorityConfig.kind: 'session'`
+  at `low_untrusted`, `SignInPolicy.allowInBrowserPasskey` and the
+  `'in_browser'` lane are replaced by Partner genesis in a follow-up.
 - **2026-10-10 — Celo gate replaces the enclave digest allowlist
   (`Cofferdam/decisions/0004`).** §4 rewritten from a Cloudflare Container
   prover spec to "Self.xyz proving and the Celo gate": the attester signs
