@@ -1296,7 +1296,7 @@ Each parameter is auditable from `cofferdam-attester/wrangler.jsonc` and
 
 ## 6. `parseDocument` primitive (Vault parser, on the device)
 
-> Rewritten 2026-10-14 (`Cofferdam/decisions/0021`, `0020`, `0022`). The
+> Rewritten 2026-10-14 (`Cofferdam/decisions/0021`, `0020`). The
 > earlier text specified Gemma-4-26B vision on Workers AI over the raw
 > document bytes and called the parse "transient". That is retired: a
 > hosted model that receives a passport number has received it, whatever
@@ -1422,7 +1422,6 @@ export async function parseDocument<T>(
 - Does not bundle medical, construction, or any vertical schemas.
 - Does not validate that the parsed data is "correct" — that is the
   consumer's job (and ultimately the user's, via the review screen).
-- Does not run a trusted-execution path (`Cofferdam/decisions/0022`).
 
 The maritime parsing intelligence (STCW disambiguation, NOGEPA
 Module 2.7, Brazilian TICB vs OPITO LB-COX, NR-10/33/34/35, etc.)
@@ -1575,7 +1574,7 @@ breaks in the field.
 ## Change log
 
 - **2026-10-14 — The Vault parser runs on the device
-  (`Cofferdam/decisions/0020`, `0021`, `0022`).** §6 rewritten:
+  (`Cofferdam/decisions/0020`, `0021`).** §6 rewritten:
   `parseDocument` takes OS-OCR text blocks, never bytes; Gemma-4 vision
   on Workers AI is retired. Header, contact and references blocks never
   leave the phone; the other blocks are extracted into schemas with no
@@ -1583,7 +1582,7 @@ breaks in the field.
   llama.rn, or the de-identified block protocol on
   `llama-3.3-70b-instruct-fp8-fast` JSON mode through the strict AI
   Gateway); validators include the on-device ESCO allow-list; the
-  placeholder map stays in the Vault. No TEE path. The package table,
+  placeholder map stays in the Vault. The package table,
   the Week 7–8 milestone and the §10.2 Vault round-trip test follow.
 - **2026-10-12 — The account enforces the tiers on-chain
   (`Cofferdam/decisions/0015`).** `CofferdamAccount4337.validateUserOp`
