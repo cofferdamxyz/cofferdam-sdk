@@ -82,6 +82,7 @@ import {
 import { bytesToBase64url } from '../identity/webauthn.js'
 import { signSessionAttestation } from '../identity/sessionAttestation.js'
 import { SignInRejected } from './MockProvider.js'
+import { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './permission.js'
 import { buildInitCode, relayUserOperation, type PackedUserOperation } from './userOpRelay.js'
 import type {
   AuthorityDescriptor,
@@ -107,11 +108,14 @@ const abi = AbiCoder.defaultAbiCoder()
 /** Canonical ERC-4337 EntryPoint v0.7 address on Base. */
 const ENTRY_POINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032'
 
-/** Minimal factory ABI — only the surface this provider calls. */
+/**
+ * Minimal factory ABI — only the surface this provider calls. Since decision
+ * 0016 the genesis authority carries a `Permission` (empty for a passkey).
+ */
 const FACTORY_ABI = [
-  'function getAddress(address initialModule, bytes initialConfig, bytes32 salt) view returns (address)',
-  'function deployAccount(address initialModule, bytes initialConfig, bytes32 salt) returns (address)',
-] as const
+  `function getAddress(address initialModule, bytes initialConfig, ${PERMISSION_TUPLE} initialPermission, bytes32 salt) view returns (address)`,
+  `function deployAccount(address initialModule, bytes initialConfig, ${PERMISSION_TUPLE} initialPermission, bytes32 salt) returns (address)`,
+]
 
 /** Encoder for the factory's `deployAccount` (the `initCode` of a first op). */
 const FACTORY_IFACE = new Interface(FACTORY_ABI as unknown as string[])
@@ -119,9 +123,11 @@ const FACTORY_IFACE = new Interface(FACTORY_ABI as unknown as string[])
 /**
  * Extra verification gas for an op that deploys its sender: EntryPoint v0.7
  * runs the factory inside `verificationGasLimit`. `deployAccount` measured
- * 1.36M on Base Sepolia (2026-10-11); this leaves headroom for validateUserOp.
+ * 3.60M on Base Sepolia for the decision 0016 account (2026-10-14; 1.36M
+ * before the registries and the genesis permission). With the 1.5M call
+ * limit the app uses this reaches the plane's 5M verification cap exactly.
  */
-const DEPLOY_VERIFICATION_GAS = 2_000_000n
+const DEPLOY_VERIFICATION_GAS = 3_500_000n
 
 /** Minimal account ABI for on-chain authority reads + management self-calls. */
 const ACCOUNT_ABI = [
@@ -129,9 +135,8 @@ const ACCOUNT_ABI = [
   'function upgradeLocked() view returns (bool)',
   'function authorityCount() view returns (uint256)',
   'function getAuthority(uint256 authorityId) view returns (address module, uint8 tier, bool active, bytes config)',
-  'function addAuthority(uint256 authorityId, address newModule, bytes newConfig) returns (uint256 newAuthorityId)',
-  'function revokeAuthority(uint256 authorityId, uint256 targetId)',
-  'function enrollFirstPasskey(uint256 lowAuthorityId, address passkeyModule, bytes passkeyConfig)',
+  `function addAuthority(address newModule, bytes newConfig, ${PERMISSION_TUPLE} permission) returns (uint256 authorityId)`,
+  'function revokeAuthority(uint256 targetId)',
   'function execute(address target, uint256 value, bytes data) external',
 ] as const
 
@@ -274,6 +279,13 @@ export interface NativeAccountProviderConfig {
   genesisAuthority?: GenesisAuthorityConfig
 
   /**
+   * The genesis authority's permission (decision 0016). A High (passkey)
+   * genesis carries none; a Partner or Managed genesis needs the grant the
+   * account will enforce. It is part of the CREATE2 address.
+   */
+  genesisPermission?: Permission
+
+  /**
    * The plane's UserOperation relay (cofferdam-api base URL). Signed ops are
    * POSTed to `/v1/aa/user-operation`; the relayer submits `handleOps` with
    * its own funded key and the paymaster refunds it. A not-yet-deployed
@@ -344,6 +356,7 @@ interface ResolvedConfig {
   verifiedClaims: VerifiedClaims
   latencyMs: number
   genesis: GenesisAuthorityConfig
+  genesisPermission: Permission
 }
 
 /** Parameters for an account-routed transaction. */
@@ -409,6 +422,7 @@ export class NativeAccountProvider implements CofferdamProvider {
       },
       latencyMs: config.latencyMs ?? 0,
       genesis,
+      genesisPermission: config.genesisPermission ?? NO_PERMISSION,
     }
     // chainId 31337 = local base-anvil; 84532 = Base Sepolia; 8453 = Base mainnet.
     this.mode = this.config.chainId === 84532 || this.config.chainId === 8453 ? 'testnet' : 'local'
@@ -549,6 +563,7 @@ export class NativeAccountProvider implements CofferdamProvider {
     this.cachedAddress = (await factory.getFunction('getAddress')(
       this.genesisModule(),
       config,
+      this.config.genesisPermission,
       this.salt(),
     )) as string
     return this.cachedAddress
@@ -584,7 +599,7 @@ export class NativeAccountProvider implements CofferdamProvider {
     const deployer = new EthWallet(this.config.deployerPrivateKey, new JsonRpcProvider(this.config.rpcUrl))
     const factory = new EthContract(this.config.contracts.factory, FACTORY_ABI as unknown as string[], deployer)
     const config = await this.bootstrapConfig()
-    const tx = await factory.getFunction('deployAccount')(this.genesisModule(), config, this.salt())
+    const tx = await factory.getFunction('deployAccount')(this.genesisModule(), config, this.config.genesisPermission, this.salt())
     await tx.wait()
     return addr
   }
@@ -619,6 +634,7 @@ export class NativeAccountProvider implements CofferdamProvider {
             FACTORY_IFACE,
             this.genesisModule(),
             await this.bootstrapConfig(),
+            this.config.genesisPermission,
             this.salt(),
           )
         : '0x'
@@ -802,9 +818,9 @@ export class NativeAccountProvider implements CofferdamProvider {
     if (state.passkeyCount >= MAX_PASSKEYS) throw new PasskeyCapReachedError()
 
     const data = ACCOUNT_IFACE.encodeFunctionData('addAuthority', [
-      opts.authorityId ?? this.config.authorityId,
       this.config.contracts.passkeyModule,
       encodePasskeyConfig(pub),
+      NO_PERMISSION,
     ])
     return this.sendTransaction({
       to: await this.getAccountAddress(),
@@ -822,10 +838,7 @@ export class NativeAccountProvider implements CofferdamProvider {
     targetId: number,
     opts: { authorityId?: number } = {},
   ): Promise<TransactionReceipt> {
-    const data = ACCOUNT_IFACE.encodeFunctionData('revokeAuthority', [
-      opts.authorityId ?? this.config.authorityId,
-      targetId,
-    ])
+    const data = ACCOUNT_IFACE.encodeFunctionData('revokeAuthority', [targetId])
     return this.sendTransaction({
       to: await this.getAccountAddress(),
       data,
@@ -852,27 +865,11 @@ export class NativeAccountProvider implements CofferdamProvider {
           '(already High-tier). This upgrade path is for web2-credential (session) accounts.',
       )
     }
-    await this.ensureDeployed()
-    const pub = await this.publicKey()
-    const lowAuthorityId = this.config.authorityId // session genesis lives at id 0
-    const data = ACCOUNT_IFACE.encodeFunctionData('enrollFirstPasskey', [
-      lowAuthorityId,
-      this.config.contracts.passkeyModule,
-      encodePasskeyConfig(pub),
-    ])
-    await this.sendTransaction({
-      to: await this.getAccountAddress(),
-      data,
-      authorityId: lowAuthorityId,
-    })
-    return {
-      accountAddress: await this.getAccountAddress(),
-      accountDeployed: true,
-      passkeyCredentialId: `p256:${pub.qx.slice(2, 18)}`,
-      authority: { kind: 'passkey', tier: 'high' },
-      migrationStatus: 'enrolled',
-      upgradeLocked: true,
-    }
+    throw new Error(
+      '[cofferdam-sdk] enrollFirstPasskey: decision 0016 replaced the ratchet with the co-signed ' +
+        'enrollFirstHigh ceremony (the new passkey\'s assertion over firstHighChallenge plus the ' +
+        "plane's POST /v1/ceremony/first-high attestation); the SDK client for it is not written yet.",
+    )
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@
  * `fetch` so callers (and tests) can supply their own.
  */
 import { concat, type Interface } from 'ethers'
+import type { Permission } from './permission.js'
 
 /** EntryPoint v0.7 packed operation, as the SDK builds and signs it. */
 export interface PackedUserOperation {
@@ -69,9 +70,13 @@ export function buildInitCode(
   factoryIface: Interface,
   initialModule: string,
   initialConfig: string,
+  initialPermission: Permission,
   salt: string,
 ): string {
-  return concat([factory, factoryIface.encodeFunctionData('deployAccount', [initialModule, initialConfig, salt])])
+  return concat([
+    factory,
+    factoryIface.encodeFunctionData('deployAccount', [initialModule, initialConfig, initialPermission, salt]),
+  ])
 }
 
 /** The plane refused or failed to relay the op. `code` is its error id. */

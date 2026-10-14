@@ -1433,7 +1433,10 @@ const provider = new NativeAccountProvider({
 await provider.signIn({})            // derive counterfactual address (no chain write)
 await provider.ensureDeployed()      // first sponsored op: a no-op self-call carrying the factory initCode
 await provider.sendTransaction({ to, value, data })   // gasless UserOp via paymaster
-await provider.enrollFirstPasskey({ lane: 'in_browser' }) // one-way ratchet → High-tier passkey
+// The first High passkey on a Partner or Managed account is the co-signed `enrollFirstHigh`
+// ceremony (decision 0016: the new key's assertion + the plane's POST /v1/ceremony/first-high
+// attestation); `enrollFirstPasskey` now throws, the SDK client for the ceremony is pending.
+// A Partner or Managed genesis passes its grant as `genesisPermission` (part of the address).
 ```
 
 Gas-sponsorship notes (PoC paymaster):

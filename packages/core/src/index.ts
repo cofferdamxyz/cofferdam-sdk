@@ -32,6 +32,7 @@ export {
   type PackedUserOperationJson,
   type RelayUserOperationOptions,
 } from './providers/userOpRelay.js'
+export { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './providers/permission.js'
 export {
   encodeSessionConfig,
   signSessionInner,

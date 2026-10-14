@@ -23,6 +23,7 @@ import {
   PasskeyCapReachedError,
   SignInRejected,
 } from '../src/index.js'
+import { NO_PERMISSION, PERMISSION_TUPLE } from '../src/index.js'
 
 const RPC_URL = 'http://127.0.0.1:8545'
 const CHAIN_ID = 31337
@@ -73,7 +74,7 @@ async function nodeReachable(): Promise<boolean> {
 const FORCE = process.env.COFFERDAM_LOCAL_INTEGRATION === '1'
 
 const FACTORY_ABI: string[] = [
-  'function getAddress(address initialModule, bytes initialConfig, bytes32 salt) view returns (address)',
+  `function getAddress(address initialModule, bytes initialConfig, ${PERMISSION_TUPLE} initialPermission, bytes32 salt) view returns (address)`,
 ]
 
 describe('NativeAccountProvider (integration)', () => {
@@ -142,7 +143,7 @@ describe('NativeAccountProvider (integration)', () => {
 
     const chain = new JsonRpcProvider(RPC_URL)
     const factory = new EthContract(dep.factory, FACTORY_ABI, chain)
-    const onchain: string = await factory.getFunction('getAddress')(dep.passkeyModule, config, salt)
+    const onchain: string = await factory.getFunction('getAddress')(dep.passkeyModule, config, NO_PERMISSION, salt)
     expect(result.accountAddress.toLowerCase()).toBe(onchain.toLowerCase())
   }, 30_000)
 

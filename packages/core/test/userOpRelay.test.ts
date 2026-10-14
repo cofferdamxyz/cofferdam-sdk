@@ -10,12 +10,14 @@ import {
   relayUserOperation,
   serializeUserOperation,
   type PackedUserOperation,
+  NO_PERMISSION,
+  PERMISSION_TUPLE,
 } from '../src/index.js'
 
 const FACTORY = '0x35CeBf87f5DAE7be7cf755067d30fC65Fa541F3D'
 const MODULE = '0x279Cf7DF840a76EE9EcC1C177698E6EaB490Eea8'
 const FACTORY_IFACE = new Interface([
-  'function deployAccount(address initialModule, bytes initialConfig, bytes32 salt) returns (address)',
+  `function deployAccount(address initialModule, bytes initialConfig, ${PERMISSION_TUPLE} initialPermission, bytes32 salt) returns (address)`,
 ])
 
 const op: PackedUserOperation = {
@@ -34,14 +36,15 @@ describe('buildInitCode', () => {
   it('is the factory address followed by the deployAccount calldata', () => {
     const config = '0x' + '11'.repeat(64)
     const salt = '0x' + '22'.repeat(32)
-    const initCode = buildInitCode(FACTORY, FACTORY_IFACE, MODULE, config, salt)
+    const initCode = buildInitCode(FACTORY, FACTORY_IFACE, MODULE, config, NO_PERMISSION, salt)
     expect(initCode.slice(0, 42).toLowerCase()).toBe(FACTORY.toLowerCase())
     const calldata = '0x' + initCode.slice(42)
     expect(calldata.slice(0, 10)).toBe(FACTORY_IFACE.getFunction('deployAccount')!.selector)
     const decoded = FACTORY_IFACE.decodeFunctionData('deployAccount', calldata)
     expect(decoded[0].toLowerCase()).toBe(MODULE.toLowerCase())
     expect(decoded[1]).toBe(config)
-    expect(decoded[2]).toBe(salt)
+    expect(decoded[2].expiry).toBe(0n)
+    expect(decoded[3]).toBe(salt)
   })
 })
 
