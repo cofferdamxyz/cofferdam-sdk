@@ -1211,6 +1211,21 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
   with their RN-app passkey simply makes one passkey an authority on a second
   AA — that is not a merge. Reconciliation stays off the migration path.
 
+### 3.12 Re-bind: the nullifier follows the person (decision 0022)
+
+`NullifierRegistry` v2 (Base Sepolia `0xC4931d4492a9E7124735dd040890BC2cc427505F`,
+2026-10-14) adds `rebind`: a fresh `disclose` proof whose `userContextData`
+names the new account moves a bound nullifier there, clearing the old
+account's binding (`NullifierRebound`). The attester co-signs a distinct,
+epoch-bound message (`rebindMessageHash`, tag `cofferdam-rebind-v1`, epoch =
+`rebindCount[nullifier]`), so a bind signature never replays as a rebind and
+each rebind signature is single-use. Mainnet waits `rebindDelay` (72 h) with
+`finalizeRebind` by anyone and `cancelRebind` by the bound account; Sepolia is
+immediate. This is the device-loss and contract-migration recovery for
+sovereign accounts; §3.11 `recoverWithSelf` stays the company-bound case. The
+one-shot statements earlier in §3 describe `verifyAndBind` (the first bind);
+the invariant that survives is one nullifier, one account at any time.
+
 ## 4. Self.xyz proving and the Celo gate
 
 There is no Cofferdam prover. Self.xyz generates every proof inside its own
