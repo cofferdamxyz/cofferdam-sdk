@@ -1213,8 +1213,9 @@ with **no seed phrase** (recovery is §2.5.3, never seed export).
 
 ### 3.12 Re-bind: the nullifier follows the person (decision 0022)
 
-`NullifierRegistry` v2 (Base Sepolia `0xC4931d4492a9E7124735dd040890BC2cc427505F`,
-2026-10-14) adds `rebind`: a fresh `disclose` proof whose `userContextData`
+`NullifierRegistry` v2 (2026-10-14; on Base Sepolia today as v3
+`0xF025204964A355D3125CF15Bd606B8CFc92FbDB6`, which keeps this surface and adds
+decision 0023's `provenNullifier`) adds `rebind`: a fresh `disclose` proof whose `userContextData`
 names the new account moves a bound nullifier there, clearing the old
 account's binding (`NullifierRebound`). The attester co-signs a distinct,
 epoch-bound message (`rebindMessageHash`, tag `cofferdam-rebind-v1`, epoch =
