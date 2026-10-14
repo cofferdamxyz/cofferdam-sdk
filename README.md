@@ -407,10 +407,10 @@ Each consumer app registers, at integration-onboarding time, the document catego
 await cofferdam.scope.registerDocumentCategories([
   {
     category: 'trade-certificate',       // your own name — no names are reserved
-    parser:   'workers-ai',              // backed by @cf/google/gemma-4-26b-a4b-it;
-                                          // override per call with `model: '...'`
-    prompt:   tradeCertificatePrompt,    // your domain prompt
-    schema:   tradeCertificateSchema,    // your Zod schema for the structured fields
+    parser:   'on-device',               // OS OCR + block extraction on the phone
+                                          // (local model or de-identified blocks on
+                                          // Workers AI); bytes never reach a model
+    schemas:  tradeCertificateBlockSchemas, // per-block Zod schemas, no free-text fields
     display:  {
       // Optional: tells the Cofferdam app how to render this category in
       // its unified Vault inbox. Falls back to a generic key/value renderer.
@@ -1254,7 +1254,7 @@ This is the canonical mapping from SDK calls to billable units. The SDK reports 
 | `messages.send(...)` | ❌ | — | Free; message volume not metered. |
 | `groups.create({ flavor: 'verified' })` | ✅ | $0.02 / group, once at creation | Plus $0.02 per member who hasn't been in a verified conv before. |
 | `documents.upload({ category, parser: 'none' })` | ❌ | — | Blob storage only; counts toward your storage quota (see §7.5). |
-| `documents.upload({ category })` with parser config | candidate | $0.02 / doc hypothesis | Workers AI parse via `@cofferdam/sdk-vault parseDocument`; commercial GA terms live in `../COFFERDAM_REVENUE.md` §2.3 and are not locked by this SDK table. |
+| `documents.upload({ category })` with parser config | candidate | $0.02 / doc hypothesis | On-device parse via `@cofferdam/sdk-vault parseDocument` (hosted cost only on the de-identified block executor); commercial GA terms live in `../COFFERDAM_REVENUE.md` §2.3 and are not locked by this SDK table. |
 | `documents.requestShare(...)` | ❌ | — | Free; ciphertext re-wrap only. |
 | `documents.openInCofferdam(docId)` | ❌ | — | Free; just a deep link. |
 | `signing.signTransaction(...)` against allowlisted contract | ❌ | — | Gas is paymaster-borne; you are not billed. |

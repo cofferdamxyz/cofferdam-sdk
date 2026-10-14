@@ -61,7 +61,7 @@
 - [3. The bind flow, end to end](#3-the-bind-flow-end-to-end)
 - [4. Self.xyz proving and the Celo gate](#4-selfxyz-proving-and-the-celo-gate)
 - [5. Attester hardening parameters](#5-attester-hardening-parameters)
-- [6. Workers AI `parseDocument` primitive (Vault parser)](#6-workers-ai-parsedocument-primitive-vault-parser)
+- [6. `parseDocument` primitive (Vault parser, on the device)](#6-parsedocument-primitive-vault-parser-on-the-device)
 - [7. Multi-device reconciliation primitives](#7-multi-device-reconciliation-primitives)
 - [8. Trust model](#8-trust-model)
 - [9. What this doc deliberately does not specify](#9-what-this-doc-deliberately-does-not-specify)
@@ -81,7 +81,7 @@ one v2 contract deploy**:
 | `@cofferdam/sdk` (`packages/core`) — provider interfaces, identity primitives | Already exists; receives `CofferdamNativeProvider` + `CofferdamAppProvider` additions | extends existing |
 | `@cofferdam/sdk-react-native` (`packages/react-native`) | Native Secure Enclave / StrongBox passkey bridge for the Cofferdam RN app | **NEW** |
 | `@cofferdam/sdk-enterprise` (`packages/enterprise`) | Tenant + KYB + Polis SSO + Safe deploy primitives (vertical-agnostic, scoped under T3 in `ENTERPRISE_MODULE_PLAN.md`) | **NEW** (lifted from OffshoreSync's backend per the SDK-first restructure) |
-| `@cofferdam/sdk-vault` (`packages/vault`) | Workers AI `parseDocument` primitive — consumer brings prompt + schema | **NEW** |
+| `@cofferdam/sdk-vault` (`packages/vault`) | on-device `parseDocument` primitive — consumer brings per-block schemas; no bytes to hosted models (§6) | **NEW** |
 | Self.xyz GCP Confidential Space enclave | Self.xyz's own proving infrastructure — Cofferdam does not run a prover | external dependency |
 | `contracts/contracts/v2/self/NullifierRegistry` deploy on Base Sepolia + Base Mainnet | v2 production ingress (replaces the legacy cross-chain bridge path) | deploy of already-audited code |
 
@@ -96,7 +96,7 @@ Week 3-4 ─ v2 NullifierRegistry deploy on Base Sepolia
 Week 4-6 ─ Cloudflare Container Self prover — image build + R2 SRS + smoke
 Week 5-7 ─ End-to-end: passkey → prove → attester sign → bindNullifier
 Week 6-8 ─ Multi-device reconciliation primitives (§7)
-Week 7-8 ─ @cofferdam/sdk-vault Workers AI parseDocument + Gemma-4-26B
+Week 7-8 ─ @cofferdam/sdk-vault on-device parseDocument (llama.rn / block protocol)
 Week 8-9 ─ Integration tests + E2E recordings + replace MockProvider refs
 ```
 
@@ -1294,62 +1294,80 @@ Each parameter is auditable from `cofferdam-attester/wrangler.jsonc` and
 | **Audit log** | One JSON line per sign (`attester.signBind`) and per rejection (`attester.celoGateRejected`): account, registry, nullifier, root, proof date, code. No full `pubSignals`. | Replay auditor reconciles against `NullifierBound` events; revealed-data words never hit logs. |
 | **Tests** | Vitest over the gate, validation and signing with fixtures; `CELO_LIVE=1` runs the gate against forno. | The gate semantics are pinned independently of the network. |
 
-## 6. Workers AI `parseDocument` primitive (Vault parser)
+## 6. `parseDocument` primitive (Vault parser, on the device)
 
-The Vault primitive moves from a prior spec that considered a TEE-backed
-Gemini Vision to **Workers AI + Gemma-4-26B-A4B-IT** (`@cf/google/gemma-4-26b-a4b-it`).
-Same model family OffshoreSync's `syncai` already trusts (Gemini 3
-distillation lineage), 4B active params on inference, native
-vision, $0.10/M tokens against Cloudflare edge GPUs.
+> Rewritten 2026-10-14 (`Cofferdam/decisions/0021`, `0020`, `0022`). The
+> earlier text specified Gemma-4-26B vision on Workers AI over the raw
+> document bytes and called the parse "transient". That is retired: a
+> hosted model that receives a passport number has received it, whatever
+> it is told to ignore, and Cofferdam holds no name, email or phone that a
+> redactor could match against. **No image, PDF or raw OCR text ever
+> reaches a hosted model.** The Vault parser runs on the device, and the
+> only hosted call it may make carries de-identified, schema-bound text
+> blocks with no user or document identifier.
 
-The SDK ships `parseDocument` as a generic primitive. The consumer
-brings the prompt + schema; the SDK provides the plumbing.
+The SDK ships `parseDocument` as a generic primitive. The consumer brings
+the block schemas; the SDK provides the pipeline. The same primitive
+parses CVs for Cofferdam Work (`../WORK_WALLET_DESIGN.md` §4, §17.7) and
+certificates for the Vault.
 
 ### 6.1 Public API
 
 ```ts
 // @cofferdam/sdk-vault — packages/vault/src/parseDocument.ts
 
-export type WorkersAIVisionModel =
-  | 'gemma-4-26b-a4b-it'     // default; instruction-tuned, Gemini-3 lineage
-  | 'llama-3.2-vision-11b'   // optional cheap fallback
-  | 'llama-3.2-vision-90b'   // optional higher-fidelity fallback
-  | (string & {})            // forward-compat for any CF-published vision model
+/** Which executor ran the extraction. Shown to the user ("what left the phone"). */
+export type ParseExecutor = 'local' | 'cloud-blocks'
+
+export interface OcrBlock {
+  /** Deterministic block kind from the on-device segmenter (heading lexicon). */
+  kind: 'header' | 'contact' | 'summary' | 'experience' | 'education'
+      | 'skills' | 'certificates' | 'languages' | 'references' | 'other'
+  /** OCR text of the block, on the device only until the gate passes it. */
+  text: string
+  /** Layout hints (page, bbox) for the review screen; never uploaded. */
+  layout?: { page: number; bbox: [number, number, number, number] }
+}
 
 export interface ParseDocumentRequest {
-  /** Raw bytes of the document. PDF or image. */
-  buffer: Buffer
-  /** MIME type — used to choose the model's multimodal input shape. */
-  mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf'
-  /** Consumer-supplied prompt. Maritime, medical, construction, anything. */
-  prompt: string
-  /** Optional Zod schema. If supplied, output is parsed + validated. */
-  schema?: ZodSchema
-  /** Model selection. Defaults to 'gemma-4-26b-a4b-it'. */
-  model?: WorkersAIVisionModel
-  /** Scope metadata for audit + Tier 2 metering — no PII. */
-  scope?: {
-    tenantRef?: string
-    userRef?: string
-    documentKind?: string  // e.g. 'maritime_certificate', 'medical_license'
-  }
+  /**
+   * OS OCR output (Vision on iOS, ML Kit on Android), already segmented
+   * by the SDK's deterministic block splitter. Never raw bytes: the SDK
+   * has no input type for an image or a PDF.
+   */
+  blocks: OcrBlock[]
+  /**
+   * Per-block Zod schemas with no free-text fields: enums, integers,
+   * bounded strings validated against the on-device ESCO allow-list.
+   * The consumer supplies these for its document kind.
+   */
+  schemas: Partial<Record<OcrBlock['kind'], ZodSchema>>
+  /**
+   * Known-identity list proposed from the header block and confirmed
+   * by the user. Lives in the Vault only; used to type placeholders.
+   */
+  identity: { persons: string[]; orgs: string[]; places: string[] }
+  /** Executor preference; `auto` picks local when the device clears the floor. */
+  executor?: ParseExecutor | 'auto'
+  /** Scope metadata for audit + Tier 2 metering — no PII, no document id. */
+  scope?: { tenantRef?: string; documentKind?: string }
 }
 
 export interface ParseDocumentResponse<T = unknown> {
-  /** Schema-validated structured output (or raw JSON if no schema). */
+  /** Schema-validated structured output, one entry per block that passed. */
   data: T
-  /** Raw model output text, preserved for debugging schema-validation failures. */
-  raw: string
-  /** Model-reported confidence [0, 1], normalised. */
-  confidence: number
-  /** Token accounting for Tier 2 metered usage billing. */
+  /** Which executor produced it. */
+  executor: ParseExecutor
+  /** Blocks withheld from any model (header, contact, references) and why. */
+  withheld: Array<{ kind: OcrBlock['kind']; reason: 'never-leaves' | 'validator' }>
+  /** Placeholder map ([PERSON_1] → string). Device/Vault only; never serialised to the plane. */
+  rehydration: Map<string, string>
+  /** Token accounting for the cloud executor (zero on local). */
   tokensIn: number
   tokensOut: number
-  /** Cost in USD cents, computed from the per-model rate card. */
   costUsdCents: number
-  /** Resolved model name (after fallback resolution). */
+  /** Resolved model id and version per executor. */
   modelVersion: string
-  /** ISO timestamp. */
   parsedAt: string
 }
 
@@ -1360,54 +1378,70 @@ export async function parseDocument<T>(
 
 ### 6.2 What the SDK does
 
-1. Marshals the multimodal payload into the Workers AI binding's
-   expected shape: `{ messages: [{ role: 'user', content: [text +
-   image] }] }`.
-2. Calls the chosen Workers AI model (`@cf/google/gemma-4-26b-a4b-it`
-   by default).
-3. Robust JSON extraction — strips markdown fences, handles
-   model-occasional preamble, recovers gracefully from "almost
-   JSON" with the same `parseJsonResponse` pattern OffshoreSync's
-   `syncai/geminiService.js` already uses.
-4. Optional schema validation via Zod. On validation failure,
-   returns structured error with the raw output preserved.
-5. Surfaces `tokensIn` / `tokensOut` / `costUsdCents` so Tier 2
-   integrators see metered usage line up with
-   `../COFFERDAM_REVENUE.md` §2.3.
-6. Audit-logs `scope.tenantRef + scope.userRef + scope.documentKind`
-   (no PII, no document content, no extracted fields).
+1. **Segments and types.** The deterministic splitter (multilingual
+   heading lexicon, no model) assigns each OCR block a `kind`.
+   `header`, `contact` and `references` are marked `never-leaves` and
+   are only ever read on the device (identity proposal, Vault record).
+2. **Proposes identity.** Names, organisations and places are lifted
+   from the header without a model and shown to the user to confirm;
+   the confirmed list types the placeholders (`[PERSON_n]`, `[ORG_n]`,
+   `[PLACE_n]`, `[ID_n]`, `[CONTACT_n]`) that replace them in every
+   other block before extraction.
+3. **Extracts per block through the pluggable executor.**
+   - `local`: MiniCPM-V 4.7-1B through `llama.rn` with the block's
+     schema compiled to a GBNF grammar (thinking off, 4x downsampled
+     projector, 8k context). Zero bytes leave the phone.
+   - `cloud-blocks`: one request per non-withheld block, with no user or
+     document identifier, to `@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+     in JSON mode (`gpt-oss-120b` pinned fallback) through the
+     `cofferdam-api` inference seam and the strict AI Gateway (no cache,
+     DLP in Block mode, payload logging off). The seam accepts only the
+     branded de-identified type and fails closed.
+4. **Validates.** Every field is checked against its schema and the
+   on-device ESCO allow-list; a title or skill that matches nothing is
+   flagged for the user, never minted blindly. Model output is never
+   repaired.
+5. **Renders "what leaves the phone".** The user sees the exact
+   de-identified fields before anything is uploaded, and which executor
+   produced them.
+6. Surfaces `tokensIn` / `tokensOut` / `costUsdCents` for the cloud
+   executor so Tier 2 integrators see metered usage line up with
+   `../COFFERDAM_REVENUE.md` §2.3, and audit-logs `scope.tenantRef +
+   scope.documentKind` (no PII, no document content, no extracted
+   fields, no user reference).
 
 ### 6.3 What the SDK explicitly does **not** do
 
+- Does not accept an image or a PDF. There is no code path that sends
+  document bytes, or an unsegmented OCR dump, to any model.
+- Does not send the header, contact or references blocks anywhere.
+- Does not upload the placeholder map; rehydration happens on the
+  device and the map is stored, if at all, inside the client-encrypted
+  Vault document.
 - Does not bundle maritime prompts. Does not know what an STCW is.
-- Does not bundle medical, construction, or any vertical prompts.
-- Does not enforce a global output schema.
-- Does not validate that the parsed data is "correct" — that's the
-  consumer's job (and ultimately the user's, via the
-  user-confirmation review pattern OffshoreSync renders in its
-  Certificate Wallet UI).
+- Does not bundle medical, construction, or any vertical schemas.
+- Does not validate that the parsed data is "correct" — that is the
+  consumer's job (and ultimately the user's, via the review screen).
+- Does not run a trusted-execution path (`Cofferdam/decisions/0022`).
 
 The maritime parsing intelligence (STCW disambiguation, NOGEPA
 Module 2.7, Brazilian TICB vs OPITO LB-COX, NR-10/33/34/35, etc.)
 stays in `react-server/services/syncai/geminiService.js` under
-OffshoreSync's existing licence. `syncai` becomes a consumer of
-this SDK primitive — exactly one call swap (see
-`@/Users/hoff/Development/Cofferdam/STRATEGY.md` §2.3 and the analogous
-abstraction in `@/Users/hoff/Development/Cofferdam/cofferdam-sdk/IDENTITY_LAYER_DESIGN.md` §6.1
-above):
+OffshoreSync's existing licence and becomes a consumer of this
+primitive: the prompt becomes a set of per-block schemas, and the
+certificate identifier is mapped to a `cert:` token on the device, so
+the exact certificate confirm (`../WORK_WALLET_DESIGN.md` §17.3) never
+depends on a model.
 
 ```js
-// syncai/geminiService.js — only line that changes:
-const { data: result } = await parseDocument({
-  buffer,
-  mimeType,
-  prompt,            // unchanged — the full maritime prompt
-  schema: maritimeCertificateSchema,
-  scope: { tenantRef, userRef, documentKind: 'maritime_certificate' },
+// syncai — the call becomes:
+const { data, executor } = await parseDocument({
+  blocks,                                    // on-device OCR, segmented by the SDK
+  schemas: maritimeCertificateBlockSchemas,  // no free-text fields
+  identity,                                  // user-confirmed, Vault only
+  scope: { tenantRef, documentKind: 'maritime_certificate' },
 })
 ```
-
-Same prompt, same shape, lower cost, edge-local latency.
 
 ## 7. Multi-device reconciliation primitives
 
@@ -1517,8 +1551,9 @@ enclave (test passport):
 - Multi-device reconciliation: orphan device → pre-flight catches
   collision → renders reconciliation prompt (asserted in
   cofferdam-sdk; the actual UI ships in T1.2).
-- Vault round-trip: upload PDF → `parseDocument` → user-
-  confirmation review → store in R2 + index in D1.
+- Vault round-trip: on-device OCR → `parseDocument` → "what leaves
+  the phone" review → store in R2 + index in D1; assert no hosted
+  request body ever contains the canary identifiers.
 
 ### 10.3 E2E recordings + demo material
 
@@ -1539,6 +1574,17 @@ breaks in the field.
 
 ## Change log
 
+- **2026-10-14 — The Vault parser runs on the device
+  (`Cofferdam/decisions/0020`, `0021`, `0022`).** §6 rewritten:
+  `parseDocument` takes OS-OCR text blocks, never bytes; Gemma-4 vision
+  on Workers AI is retired. Header, contact and references blocks never
+  leave the phone; the other blocks are extracted into schemas with no
+  free-text fields by a pluggable executor (local MiniCPM-V 4.7-1B via
+  llama.rn, or the de-identified block protocol on
+  `llama-3.3-70b-instruct-fp8-fast` JSON mode through the strict AI
+  Gateway); validators include the on-device ESCO allow-list; the
+  placeholder map stays in the Vault. No TEE path. The package table,
+  the Week 7–8 milestone and the §10.2 Vault round-trip test follow.
 - **2026-10-12 — The account enforces the tiers on-chain
   (`Cofferdam/decisions/0015`).** `CofferdamAccount4337.validateUserOp`
   now checks each userOp's call data against the signer's tier (§2.5.1):
