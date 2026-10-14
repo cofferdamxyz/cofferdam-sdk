@@ -61,6 +61,12 @@ export interface DeviceHandoffFields {
   ts: number
   /** The new device's own counterfactual AA address (binds the proof to it). */
   deviceAccount: string
+  /**
+   * The 32-byte challenge from the canonical device's invitation (QR #1),
+   * 0x-prefixed hex. When present it is folded into the digest, so the
+   * canonical device accepts only a handoff produced for its own invitation.
+   */
+  challenge?: string
 }
 
 /** A full, self-contained device-handoff payload (the QR content, decoded). */
@@ -93,20 +99,26 @@ export class DeviceHandoffLivenessError extends DeviceHandoffError {}
  * breaks the WebAuthn challenge match.
  */
 export function deviceHandoffDigest(f: DeviceHandoffFields): Uint8Array {
-  const encoded = abi.encode(
-    ['string', 'string', 'bytes32', 'bytes32', 'string', 'uint64', 'address'],
-    [
-      DIGEST_DOMAIN,
-      f.credentialId,
-      f.publicKey.qx,
-      f.publicKey.qy,
-      f.label,
-      BigInt(f.ts),
-      f.deviceAccount,
-    ],
-  )
+  const types = ['string', 'string', 'bytes32', 'bytes32', 'string', 'uint64', 'address']
+  const values: unknown[] = [
+    DIGEST_DOMAIN,
+    f.credentialId,
+    f.publicKey.qx,
+    f.publicKey.qy,
+    f.label,
+    BigInt(f.ts),
+    f.deviceAccount,
+  ]
+  if (f.challenge) {
+    types.push('bytes32')
+    values.push(f.challenge)
+  }
+  const encoded = abi.encode(types, values)
   return getBytes(keccak256(encoded))
 }
+
+/** 0x-prefixed 32-byte hex, the shape of an invitation challenge. */
+const CHALLENGE_RE = /^0x[0-9a-fA-F]{64}$/
 
 /**
  * Build a signed handoff payload on the NEW device. Prompts the passkey (the
@@ -121,6 +133,8 @@ export async function createDeviceHandoff(args: {
   deviceAccount: string
   publicKey?: P256PublicKey
   ts?: number
+  /** The invitation challenge to bind this handoff to (see `DeviceHandoffFields.challenge`). */
+  challenge?: string
 }): Promise<DeviceHandoff> {
   const label = args.label.trim()
   if (!label) {
@@ -137,6 +151,9 @@ export async function createDeviceHandoff(args: {
   if (!args.credentialId) {
     throw new DeviceHandoffError('[cofferdam-sdk] device handoff requires a credentialId.')
   }
+  if (args.challenge !== undefined && !CHALLENGE_RE.test(args.challenge)) {
+    throw new DeviceHandoffError('[cofferdam-sdk] challenge must be 0x-prefixed 32-byte hex.')
+  }
 
   const publicKey = args.publicKey ?? (await args.signer.publicKey())
   const ts = args.ts ?? Date.now()
@@ -146,6 +163,7 @@ export async function createDeviceHandoff(args: {
     label,
     ts,
     deviceAccount: args.deviceAccount,
+    ...(args.challenge ? { challenge: args.challenge.toLowerCase() } : {}),
   }
   const livenessSig = await args.signer.sign(deviceHandoffDigest(fields))
   return { v: DEVICE_HANDOFF_VERSION, ...fields, livenessSig }
@@ -238,6 +256,9 @@ function assertWellFormed(p: unknown): DeviceHandoff {
   if (typeof o.livenessSig !== 'string' || !o.livenessSig.startsWith('0x')) {
     throw new DeviceHandoffDecodeError('[cofferdam-sdk] device-handoff livenessSig is missing.')
   }
+  if (o.challenge !== undefined && (typeof o.challenge !== 'string' || !CHALLENGE_RE.test(o.challenge))) {
+    throw new DeviceHandoffDecodeError('[cofferdam-sdk] device-handoff challenge is malformed.')
+  }
   return {
     v: DEVICE_HANDOFF_VERSION,
     credentialId: o.credentialId,
@@ -245,6 +266,7 @@ function assertWellFormed(p: unknown): DeviceHandoff {
     label: o.label,
     ts: o.ts,
     deviceAccount: o.deviceAccount,
+    ...(typeof o.challenge === 'string' ? { challenge: o.challenge.toLowerCase() } : {}),
     livenessSig: o.livenessSig,
   }
 }

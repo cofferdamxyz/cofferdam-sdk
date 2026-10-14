@@ -88,6 +88,19 @@ describe('device handoff codec', () => {
     expect(() => verifyDeviceHandoff(tampered)).toThrow(DeviceHandoffLivenessError)
   })
 
+  it('binds a handoff to an invitation challenge when one is given', async () => {
+    const challenge = '0x' + 'ab'.repeat(32)
+    const h = await freshHandoff({ challenge })
+    expect(h.challenge).toBe(challenge)
+    const round = decodeAndVerifyDeviceHandoff(encodeDeviceHandoff(h))
+    expect(round.challenge).toBe(challenge)
+    // Changing the challenge breaks the liveness proof and a malformed one is refused.
+    const swapped = { ...h, challenge: '0x' + 'cd'.repeat(32) }
+    expect(() => verifyDeviceHandoff(swapped)).toThrow(DeviceHandoffLivenessError)
+    expect(() => decodeDeviceHandoff(encodeDeviceHandoff({ ...h, challenge: '0x12' } as never))).toThrow(DeviceHandoffDecodeError)
+    await expect(freshHandoff({ challenge: 'nope' })).rejects.toThrow(/challenge/)
+  })
+
   it('rejects a stale QR (replay window)', async () => {
     const handoff = await freshHandoff({ ts: Date.now() - 10 * 60_000 })
     expect(() => verifyDeviceHandoff(handoff)).toThrow(DeviceHandoffExpiredError)
