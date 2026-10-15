@@ -16,26 +16,20 @@
 // the v0.x → v1 upgrade boundary for mock/local/testnet deployments that
 // re-derive on first login after the upgrade.
 //
-// Runs identically in browsers (modern WebView), React Native (via the
-// react-native-web-crypto polyfill in α-2+), and Node >=19 (built-in
-// globalThis.crypto.subtle).
+// Pure JavaScript (`@noble/hashes`), so it runs identically in browsers,
+// Node and React Native: Hermes ships no WebCrypto, and the earlier
+// `crypto.subtle` version threw inside `signIn` on a real phone before the
+// passkey prompt (2026-10-15).
+
+import { hkdf as nobleHkdf } from '@noble/hashes/hkdf'
+import { sha256 } from '@noble/hashes/sha256'
+import { utf8ToBytes } from '@noble/hashes/utils'
 
 const PSEUDONYM_DOMAIN_SEP = 'cofferdam-pseudonym-v1'
 const SCOPEKEY_DOMAIN_SEP = 'cofferdam-scopekey-v1'
 
-function getSubtle(): SubtleCrypto {
-  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle
-  if (!subtle) {
-    throw new Error(
-      '[cofferdam-sdk] SubtleCrypto not available. Need Node >=19 or a modern browser. ' +
-        'For React Native, install a webcrypto polyfill (lands as a dep in @cofferdam/sdk-react-native).',
-    )
-  }
-  return subtle
-}
-
 /**
- * HKDF-Extract-then-Expand (RFC 5869) via Web Crypto API.
+ * HKDF-Extract-then-Expand (RFC 5869), HMAC-SHA-256.
  *
  * @param salt - Salt for the extract phase (per-app scopeSalt or scope id)
  * @param ikm  - Input key material (user nullifier or master seed)
@@ -48,29 +42,7 @@ async function hkdf(
   info: string,
   byteLength: number,
 ): Promise<Uint8Array> {
-  const subtle = getSubtle()
-  const encoder = new TextEncoder()
-
-  const keyMaterial = await subtle.importKey(
-    'raw',
-    encoder.encode(ikm) as BufferSource,
-    { name: 'HKDF' },
-    false,
-    ['deriveBits'],
-  )
-
-  const bits = await subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: encoder.encode(salt) as BufferSource,
-      info: encoder.encode(info) as BufferSource,
-    },
-    keyMaterial,
-    byteLength * 8,
-  )
-
-  return new Uint8Array(bits)
+  return nobleHkdf(sha256, utf8ToBytes(ikm), utf8ToBytes(salt), utf8ToBytes(info), byteLength)
 }
 
 function bytesToHex(bytes: Uint8Array): string {

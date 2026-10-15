@@ -1,7 +1,7 @@
 {
   "name": "@cofferdam/sdk",
   "version": "0.0.0",
-  "description": "Sign in with Cofferdam — verified-identity, on-chain-signing primitive for any app. Framework-agnostic core for Base.",
+  "description": "Sign in with Cofferdam \u2014 verified-identity, on-chain-signing primitive for any app. Framework-agnostic core for Base.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -30,13 +30,16 @@
     }
   },
   "dependencies": {
-    "@noble/curves": "^1.2.0"
+    "@noble/curves": "^1.2.0",
+    "@noble/hashes": "^1.8.0"
   },
   "peerDependencies": {
     "ethers": "^6.13.0"
   },
   "peerDependenciesMeta": {
-    "ethers": { "optional": true }
+    "ethers": {
+      "optional": true
+    }
   },
   "files": [
     "dist",

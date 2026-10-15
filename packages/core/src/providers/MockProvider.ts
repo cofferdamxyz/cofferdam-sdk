@@ -12,6 +12,8 @@
 //
 // Selecting via `new Cofferdam({ network: 'mock', ... })`.
 
+import { sha256 } from '@noble/hashes/sha256'
+import { utf8ToBytes } from '@noble/hashes/utils'
 import { assertCanEnrollFirstPasskey, tierOf } from '../identity/authority.js'
 import { derivePseudonym, deriveScopeKey } from '../identity/pseudonym.js'
 import type {
@@ -265,13 +267,7 @@ function sleep(ms: number): Promise<void> {
  */
 async function deriveMockAddress(mockUserId: string): Promise<string> {
   const input = `mock-account|${mockUserId}|cofferdam-mock-account-v1`
-  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle
-  if (!subtle) {
-    throw new Error('[cofferdam-sdk] SubtleCrypto unavailable')
-  }
-  const digest = new Uint8Array(
-    await subtle.digest('SHA-256', new TextEncoder().encode(input) as BufferSource),
-  )
+  const digest = sha256(utf8ToBytes(input))
   // Use the last 20 bytes (Ethereum-address-shaped).
   let hex = ''
   for (let i = digest.length - 20; i < digest.length; i++) {

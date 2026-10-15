@@ -16,6 +16,9 @@
 // `navigator.credentials` in the browser) drops in behind the same interface
 // without the provider or contracts changing.
 
+import { hmac } from '@noble/hashes/hmac'
+import { sha256 } from '@noble/hashes/sha256'
+import { utf8ToBytes } from '@noble/hashes/utils'
 import { p256 } from '@noble/curves/p256'
 import { AbiCoder, concat, getBytes, hexlify } from 'ethers'
 
@@ -144,20 +147,5 @@ export class DeterministicPasskeySigner implements PasskeySigner {
 }
 
 async function hmacSha256(salt: string, input: string): Promise<Uint8Array> {
-  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle
-  if (!subtle) {
-    throw new Error(
-      '[cofferdam-sdk] SubtleCrypto unavailable. Need Node >=19, a modern browser, ' +
-        'or a React Native webcrypto polyfill.',
-    )
-  }
-  const key = await subtle.importKey(
-    'raw',
-    new TextEncoder().encode(salt) as BufferSource,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await subtle.sign('HMAC', key, new TextEncoder().encode(input) as BufferSource)
-  return new Uint8Array(sig)
+  return hmac(sha256, utf8ToBytes(salt), utf8ToBytes(input))
 }

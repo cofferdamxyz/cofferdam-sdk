@@ -36,6 +36,9 @@
 //
 // Selecting via `new Cofferdam({ network: 'local', provider: new LocalChainProvider({...}) })`.
 
+import { hmac } from '@noble/hashes/hmac'
+import { sha256 } from '@noble/hashes/sha256'
+import { utf8ToBytes } from '@noble/hashes/utils'
 import { JsonRpcProvider, Wallet, Contract as EthContract } from 'ethers'
 
 import { derivePseudonym, deriveScopeKey } from '../identity/pseudonym.js'
@@ -290,8 +293,7 @@ const PRIVATE_KEY_SEED_SALT = 'cofferdam-local-privatekey-v1'
 
 /**
  * Derive a 32-byte private key deterministically from a string id. Uses
- * HMAC-SHA256 via WebCrypto — works in Node ≥ 19, modern browsers, and
- * React Native with webcrypto polyfill.
+ * HMAC-SHA256 from `@noble/hashes` (pure JS: Node, browsers, React Native).
  *
  * SECURITY NOTE: This is for local PoC only. The output is predictable to
  * anyone who knows `mockUserId` and the seed salt. Never reuse this key
@@ -306,20 +308,7 @@ async function deriveDeterministicPrivateKey(mockUserId: string): Promise<string
 }
 
 async function hmacSha256(salt: string, input: string): Promise<Uint8Array> {
-  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle
-  if (!subtle) {
-    throw new Error('[cofferdam-sdk] SubtleCrypto unavailable')
-  }
-  const keyMaterial = new TextEncoder().encode(salt)
-  const key = await subtle.importKey(
-    'raw',
-    keyMaterial as BufferSource,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await subtle.sign('HMAC', key, new TextEncoder().encode(input) as BufferSource)
-  return new Uint8Array(sig)
+  return hmac(sha256, utf8ToBytes(salt), utf8ToBytes(input))
 }
 
 function bytesToHex(bytes: Uint8Array): string {
