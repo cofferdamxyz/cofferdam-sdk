@@ -1,8 +1,8 @@
 // Top-level Cofferdam SDK class — the framework-agnostic entry point.
 //
-// Wraps a CofferdamProvider (MockProvider in α-1; LocalChainProvider in α-2;
-// TestnetProvider in α-3; ProductionProvider in β). Consumer apps construct
-// one instance per scope and reuse it across the session.
+// Wraps a CofferdamProvider (MockProvider, LocalChainProvider or
+// NativeAccountProvider). Consumer apps construct one instance per scope and
+// reuse it across the session.
 
 import {
   authorityStateFromResponse,
@@ -69,8 +69,8 @@ export class Cofferdam {
   }
 
   /**
-   * Run the consumer password→passkey migration (rev-7.7; IDENTITY_LAYER_DESIGN
-   * §3.12 C3–C6). Enrols the FIRST device passkey for an untrusted low-tier
+   * Run the retired consumer password→passkey migration (code debt; decision
+   * 0016 replaced it with the co-signed `enrollFirstHigh`). Enrols the FIRST device passkey for an untrusted low-tier
    * session, deploying the counterfactual AA and firing the one-way ratchet.
    *
    * Throws (via the provider's `enrollFirstPasskey` → `assertCanEnrollFirstPasskey`)
@@ -115,7 +115,7 @@ export class Cofferdam {
 
   /**
    * Record that the user declined the passkey upgrade. The AA stays
-   * counterfactual and is re-prompted on a later sign-in (WEB3_CONVERSION §7).
+   * counterfactual and is re-prompted on a later sign-in (retired ratchet model).
    * A no-op once the user is already `enrolled`.
    */
   async declinePasskeyUpgrade(): Promise<void> {

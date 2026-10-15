@@ -1,8 +1,8 @@
 // Public type surface for @cofferdam/sdk.
 //
-// These types are derived from cofferdam-sdk/README.md §3 (Consumer-app
-// enforcement policies) and §4 (API surface). v0.x is pre-stable; the API
-// may change between minor versions.
+// Documented in the repository README and the workspace
+// `docs/architecture/sdk.md`. v0.x is pre-stable; the API may change between
+// minor versions.
 
 export type NetworkMode = 'mock' | 'local' | 'testnet' | 'mainnet'
 
@@ -19,10 +19,9 @@ export type SelectiveClaim =
 
 export interface SignInPolicy {
   /**
-   * If true, the smart account is not deployed until Self.xyz verification +
-   * LayerZero V2 callback both complete. Strict-mode (regulated apps).
-   * Default: false (passkey + smart account immediately; Self deferred to
-   * value-gated triggers — see cofferdam-sdk/README.md §2.4).
+   * If true, the app waits for a Self.xyz binding before it uses the account.
+   * Strict mode (regulated apps). Default: false (the account is counterfactual
+   * and deploys with its first sponsored op; Self is a payout gate).
    */
   enforceSelfBeforeAccount?: boolean
   /** Seconds since the user's last Self proof. */
@@ -34,7 +33,7 @@ export interface SignInPolicy {
   requirePasskeyFreshness?: number
   /**
    * Opt in to an in-browser, origin-bound platform-authenticator passkey as the
-   * high-tier signer (IDENTITY_LAYER_DESIGN.md §3.12 C3 lane (b)). Default false
+   * high-tier signer (workspace `docs/architecture/identity.md`). Default false
    * ⇒ the SDK prefers the QR handoff to the Cofferdam RN app (the canonical,
    * portable key).
    */
@@ -48,9 +47,10 @@ export interface VerifiedClaims {
   proofTimestamp: number
 }
 
-// ── Tiered authority model (rev-7.7) ─────────────────────────────────────────
-// Full spec: cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §2.5 (authority tiers + the
-// one-way upgrade ratchet) and §3.12 (the consumer password→passkey migration).
+// ── Tiered authority model ─────────────────────────────────────────────────────
+// Current model: workspace `docs/architecture/identity.md` (High, Partner,
+// Managed; decision 0016). `low_untrusted` and the ratchet below are code debt
+// from the retired model (see `docs/architecture/sdk.md`).
 // The on-chain `CofferdamAccount4337` is the real enforcer
 // (base-contracts/contracts/account/CofferdamAccount4337.sol); these types
 // model it client-side.
@@ -82,7 +82,7 @@ export type AuthorityKind =
  */
 export type AuthorityTier = 'high' | 'low_untrusted' | 'low_managed'
 
-/** Mirror of the consumer-side `wallet.migrationStatus` (WEB3_CONVERSION §5.4). */
+/** Mirror of the consumer-side `wallet.migrationStatus` (retired ratchet model; code debt). */
 export type MigrationStatus = 'pending' | 'enrolled' | 'declined'
 
 /**
@@ -165,9 +165,9 @@ export interface PasskeyEnrollmentResult {
 export interface SignInResponse {
   /**
    * Per-app stable identifier. Store as the user's primary key in your DB.
-   * Derived as HKDF(salt=scopeSalt[your-app], IKM=nullifier(user), info=domain-sep)
-   * entirely on the user's device; the nullifier itself never reaches you.
-   * See cofferdam-sdk/README.md §5.6.
+   * Derived on the device with HKDF (`identity/pseudonym.ts`). The native
+   * provider keys it on the account address today, which changes per account
+   * generation: open question in the workspace `docs/architecture/sdk.md`.
    */
   appPseudonym: string
 
@@ -203,12 +203,12 @@ export interface SignInResponse {
    */
   authority?: AuthorityDescriptor
 
-  /** Consumer-side migration mirror (WEB3_CONVERSION §5.4). */
+  /** Consumer-side migration mirror (retired ratchet model; code debt). */
   migrationStatus?: MigrationStatus
 
   /**
    * False when the AA is counterfactual (deployed lazily on first-passkey
-   * enrolment) — IDENTITY_LAYER_DESIGN.md §3.12 C2. Absent ⇒ treat as deployed.
+   * enrolment) — workspace `docs/architecture/identity.md`. Absent ⇒ treat as deployed.
    */
   accountDeployed?: boolean
 
@@ -235,11 +235,10 @@ export interface CofferdamConfig {
 }
 
 /**
- * Provider abstraction. Concrete implementations:
- * - MockProvider          — α-1 (this file's package)
- * - LocalChainProvider    — α-2 (talks to base-anvil via ethers)
- * - TestnetProvider       — α-3 (Base Sepolia; single-chain)
- * - ProductionProvider    — β  (Base mainnet + real Cofferdam mobile app deep-link)
+ * Provider abstraction. Implementations:
+ * - MockProvider          — in-memory, for UI development
+ * - LocalChainProvider    — talks to a local base-anvil node via ethers
+ * - NativeAccountProvider — real ERC-4337 accounts on Base (`@cofferdam/sdk/native`)
  */
 export interface CofferdamProvider {
   readonly mode: NetworkMode

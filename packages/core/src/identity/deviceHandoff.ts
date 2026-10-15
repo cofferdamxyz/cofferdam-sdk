@@ -1,11 +1,12 @@
-// Air-gapped device-handoff QR payload — ARCHITECTURE.md §3.6.4 Step A.
+// Air-gapped device-handoff QR payload (`cdh1:`) for the two-QR device link —
+// workspace `docs/architecture/identity.md`.
 //
 // The NEW device renders a QR encoding its passkey public key + a liveness
 // proof-of-possession; a LINKED (canonical) device scans it, verifies the
 // proof, reviews the label, and submits `addAuthority`
 // (`NativeAccountProvider.addBackupPasskey`) to register the new passkey on the
 // shared account. This is the same primitive Cofferdam uses for offline,
-// same-room device adds at sea (ARCHITECTURE.md §1, fourth statement of intent).
+// same-room device adds with no network.
 //
 // Payload (per §3.6.4 Step A):
 //   (credentialId, pubKeyX, pubKeyY, deviceLabel, ts, deviceAccount, livenessSig)

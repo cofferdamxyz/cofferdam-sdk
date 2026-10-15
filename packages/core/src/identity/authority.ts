@@ -1,9 +1,10 @@
-// Tiered-authority logic + the one-way upgrade ratchet (rev-7.7).
+// Tiered-authority logic + the one-way upgrade ratchet of the retired model.
 //
-// Pure, I/O-free encoding of cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §2.5 (the
-// authority tiers + the ratchet) and §3.12 (the consumer password→passkey
-// migration). The on-chain `CofferdamAccountValidator` is the real enforcer
-// (contracts/WEB3_CONVERSION.md §3.1); these functions are the client-side
+// Pure, I/O-free encoding of the pre-0016 authority tiers, the ratchet and the
+// consumer password→passkey migration. The current model is in the workspace
+// `docs/architecture/identity.md`. This module encodes the RETIRED ratchet model (code debt since
+// decision 0016; see the workspace `docs/architecture/sdk.md`); the on-chain
+// enforcer is `CofferdamAccount4337`. These functions are the client-side
 // mirror that decides what the SDK should *do* and guard against obvious
 // ratchet violations before a transaction is ever built.
 
@@ -96,7 +97,7 @@ export class PasskeyUpgradeError extends Error {
 /** The one-way ratchet already fired; the low-tier authority is locked out. */
 export class UpgradePathLockedError extends PasskeyUpgradeError {
   constructor(
-    message = '[cofferdam-sdk] upgrade path is locked: a passkey already exists, so this low-tier authority can no longer add authorities (IDENTITY_LAYER_DESIGN.md §2.5.2). Recover via a backup passkey or a Self.xyz re-bind (§2.5.3).',
+    message = '[cofferdam-sdk] upgrade path is locked: a passkey already exists, so this low-tier authority can no longer add authorities (workspace `docs/architecture/identity.md`). Recover via a backup passkey or a Self.xyz re-bind (§2.5.3).',
   ) {
     super(message)
   }
@@ -117,7 +118,7 @@ export class AlreadyHighTierError extends PasskeyUpgradeError {
  */
 export class ManagedAuthorityNotUpgradableError extends PasskeyUpgradeError {
   constructor(
-    message = '[cofferdam-sdk] a managed Polis-SSO authority is not upgraded via the consumer ratchet; use the enterprise addAuthority path (IDENTITY_LAYER_DESIGN.md §3.10).',
+    message = '[cofferdam-sdk] a managed Polis-SSO authority is not upgraded via the consumer ratchet; use the enterprise addAuthority path (workspace `docs/architecture/identity.md`).',
   ) {
     super(message)
   }
@@ -126,7 +127,7 @@ export class ManagedAuthorityNotUpgradableError extends PasskeyUpgradeError {
 /** No viable enrolment lane on this surface (no app + no in-browser passkey). */
 export class PasskeyUpgradeUnsupportedError extends PasskeyUpgradeError {
   constructor(
-    message = '[cofferdam-sdk] no viable passkey-enrolment lane on this device; route the user to install the Cofferdam app (IDENTITY_LAYER_DESIGN.md §3.12 C3).',
+    message = '[cofferdam-sdk] no viable passkey-enrolment lane on this device; route the user to install the Cofferdam app (workspace `docs/architecture/identity.md`).',
   ) {
     super(message)
   }
@@ -205,7 +206,7 @@ export function authorityStateFromResponse(response: SignInResponse): AuthorityS
   }
 }
 
-// ── Migration-status transitions (WEB3_CONVERSION §5.4 / §7) ──────────────────
+// ── Migration-status transitions (retired ratchet model) ─────────────────────
 
 export type MigrationEvent = 'passkey_enrolled' | 'declined' | 'reset'
 

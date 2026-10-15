@@ -19,7 +19,7 @@
 //      proof from Self.xyz's GCP enclave + an attester signature
 //      from the cofferdam-attester Worker, submitted via an ERC-4337
 //      UserOp to `NullifierRegistry.verifyAndBind`. Full flow in
-//      cofferdam-sdk/IDENTITY_LAYER_DESIGN.md §3.
+//      workspace `docs/architecture/identity.md`.
 //
 //   4. Derive `appPseudonym = HMAC(scopeSalt, accountAddress)` and return a
 //      SignInResponse with the on-chain address.
@@ -32,7 +32,7 @@
 //   - It does NOT proxy through the (not-yet-existing) Cofferdam mobile app.
 //     That's a different transport added in α-3 / β.
 //   - It does NOT bind the user's identity on-chain. Binding requires the
-//     full prover + attester pipeline (see IDENTITY_LAYER_DESIGN.md §3).
+//     full prover + attester pipeline (see workspace `docs/architecture/identity.md`).
 //
 // Selecting via `new Cofferdam({ network: 'local', provider: new LocalChainProvider({...}) })`.
 

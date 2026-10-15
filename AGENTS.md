@@ -11,17 +11,24 @@ The SDK is built feature-by-feature, driven by consumer needs. Partial contract 
 ## Cross-Repo Coupling
 
 - `cofferdam-api/src/services/sessionAttestation.ts` must stay byte-compatible with `cofferdam-sdk/packages/core/src/identity/sessionAttestation.ts`.
-- `expo-client` is the demand-driving consumer for `@cofferdam/sdk-react-native` and a generic Assignment client. Implement only the methods required by active OffshoreSync slices; Assignment settlement references remain optional.
-- On-chain passkey authority config (`encodePasskeyConfig`) must match `PasskeyAuthority` and `WebAuthnPasskeyAuthority` config in `contracts/v2/auth/authorities/`.
-- After editing SDK source, run `yarn build` in `packages/core` and copy `dist/` into `cofferdam-app/node_modules/@cofferdam/sdk/dist` (the app uses a file dep copied, not symlinked).
+- `cofferdam-app` is the demand-driving consumer today; partner apps (OffshoreSync first) drive the rest. Implement only the methods an active consumer needs.
+- On-chain authority config must match the modules in `base-contracts/contracts/auth/` (`encodePasskeyConfig` for `WebAuthnPasskeyAuthority` / `PasskeyAuthority`, the Partner config, the genesis `Permission` tuple byte for byte, since it is a CREATE2 input).
+- After editing SDK source, run `yarn build` and copy `packages/core/dist/` into `cofferdam-app/node_modules/@cofferdam/sdk/dist` (the app uses a file dependency copy, not a symlink).
+
+## Invariants
+
+- No address table: addresses come from the caller's configuration. The decision 0025 generation table is the one planned exception.
+- Hash with `@noble/hashes`; never WebCrypto (Hermes has none).
+- Integrators resolve users by handle and never store an account address (decision 0025); new surfaces must not hand one to a consumer app.
+- The `enrollFirstHigh` client, `csa1:` v2 and the address-set derivation are planned; see `docs/architecture/sdk.md` in the workspace.
 
 ## Documentation
 
-Every SDK change must update in the same PR: client ABI, methods, JSDoc, SDK README, and any `base-contracts/README` sections the change invalidates.
+Every SDK change updates in the same change: client ABI, methods, JSDoc, this repository's README, and the workspace `docs/architecture/sdk.md` (plus `identity.md` or `contracts.md` when invariants move).
 
 ## Naming
 
-Cofferdam internals use `Cofferdam*` identifiers, not `OffshoreSync*`. Exceptions: `scope: 'offshoresync'`, references to OffshoreSync-the-product in docs, and the `react-client`/`react-server` consumer repos. Rename ladder is in `../rules/cofferdam-sdk.md`.
+Cofferdam internals use `Cofferdam*` identifiers, not `OffshoreSync*`. Exceptions: `scope: 'offshoresync'`, references to OffshoreSync-the-product in docs, and the `react-client`/`react-server` consumer repos. Details in `../rules/cofferdam-sdk.md`.
 
 ## References
 
@@ -30,5 +37,4 @@ Cofferdam internals use `Cofferdam*` identifiers, not `OffshoreSync*`. Exception
 - `../rules/cofferdam-identity.md`
 - `../rules/cofferdam-enterprise.md`
 - `../.claude/skills/add-cofferdam-sdk-client/SKILL.md`
-- `../.claude/skills/add-cofferdam-escrow-client/SKILL.md`
 - `../.claude/skills/add-cofferdam-spot-escrow/SKILL.md`

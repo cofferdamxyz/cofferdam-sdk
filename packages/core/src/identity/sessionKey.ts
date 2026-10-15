@@ -7,7 +7,7 @@
 // that web2 login onto a Base ERC-4337 smart account, with no seed phrase and
 // no change to the account ABI.
 //
-// HOW THE MAPPING WORKS (IDENTITY_LAYER_DESIGN.md §2.5 / §3.12):
+// HOW THE MAPPING WORKS (workspace `docs/architecture/identity.md`):
 //   1. The consumer's server authenticates the user the way it always has
 //      (password check, OAuth code exchange, OIDC ID-token).
 //   2. The server holds a per-account ECDSA "session signer" key and registers

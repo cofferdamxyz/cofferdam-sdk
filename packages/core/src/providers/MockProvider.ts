@@ -231,7 +231,7 @@ export class MockProvider implements CofferdamProvider {
     const accountAddress = await deriveMockAddress(this.config.mockUserId)
     // Fire the one-way ratchet: the first passkey becomes the high-tier
     // authority and the untrusted low-tier authority is permanently locked out
-    // (IDENTITY_LAYER_DESIGN.md §2.5.2).
+    // (workspace `docs/architecture/identity.md`).
     this.state = {
       active: { kind: 'passkey', tier: 'high' },
       passkeyCount: 1,

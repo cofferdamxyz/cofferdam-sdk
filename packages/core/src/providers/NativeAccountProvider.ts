@@ -850,7 +850,7 @@ export class NativeAccountProvider implements CofferdamProvider {
    * Enrol the FIRST device passkey from a web2-credential (session) account and
    * FIRE THE ONE-WAY RATCHET: the account gains a High-tier passkey and every
    * LowUntrusted authority (the original web2 login) is permanently deactivated
-   * (IDENTITY_LAYER_DESIGN.md §2.5.2). This is the single action a LowUntrusted
+   * (workspace `docs/architecture/identity.md`). This is the single action a LowUntrusted
    * authority may perform. The new passkey is this provider's `signer` (the PoC
    * deterministic passkey by default; pass a hardware/WebAuthn signer in prod).
    *
