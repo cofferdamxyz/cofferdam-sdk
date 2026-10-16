@@ -142,6 +142,7 @@ const ACCOUNT_ABI = [
   'function upgradeLocked() view returns (bool)',
   'function authorityCount() view returns (uint256)',
   'function getAuthority(uint256 authorityId) view returns (address module, uint8 tier, bool active, bytes config)',
+  'function probationEndsAt(uint256 authorityId) view returns (uint48)',
   `function addAuthority(address newModule, bytes newConfig, ${PERMISSION_TUPLE} permission) returns (uint256 authorityId)`,
   'function revokeAuthority(uint256 targetId)',
   'function execute(address target, uint256 value, bytes data) external',
@@ -165,15 +166,17 @@ const ENTRY_POINT_ABI = [
  */
 export const MAX_PASSKEYS = 3
 
-/** Map the on-chain `Tier` enum (None/LowUntrusted/LowManaged/High) to the SDK tier. */
+/** Map the on-chain `Tier` enum (None/LowUntrusted/LowManaged/High/Partner) to the SDK tier. */
 const TIER_BY_ENUM: Record<number, AuthorityTier | null> = {
   0: null, // Tier.None — a never-populated slot.
   1: 'low_untrusted',
   2: 'low_managed',
   3: 'high',
+  4: 'partner',
 }
 
 function kindForRecord(tier: AuthorityTier, isPasskey: boolean): AuthorityKind {
+  if (tier === 'partner') return 'partner_passkey'
   if (isPasskey || tier === 'high') return 'passkey'
   if (tier === 'low_managed') return 'polis_sso'
   return 'password' // best-effort label for an untrusted low-tier authority
@@ -197,6 +200,15 @@ export interface AuthorityRecord {
   isSelf: boolean
   /** Opaque per-account authority config blob (abi.encode(qx,qy) for passkeys). */
   config: string
+  /**
+   * Unix seconds when this High leaves probation (decision 0023), read from the
+   * account's `probationEndsAt`; `null` when the authority is not probationary
+   * (genesis, first or recovered High, every other tier) or the account is not
+   * deployed. A probationary High may transact at once but cannot add or revoke
+   * authorities until this time; compare it to the clock, never to a local
+   * "added" date.
+   */
+  probationEndsAt: number | null
 }
 
 /**
@@ -744,8 +756,8 @@ export class NativeAccountProvider implements CofferdamProvider {
 
   /**
    * Enumerate the account's on-chain authority registry: every device passkey
-   * (High) plus any managed/Self authorities. Skips never-populated (`None`)
-   * slots. On a counterfactual (not-yet-deployed) account, returns the single
+   * (High), Partner passkey and managed/Self authority, with each High's
+   * `probationEndsAt`. Skips never-populated (`None`) slots. On a counterfactual (not-yet-deployed) account, returns the single
    * bootstrap passkey at id 0.
    */
   async listAuthorities(): Promise<AuthorityRecord[]> {
@@ -765,6 +777,7 @@ export class NativeAccountProvider implements CofferdamProvider {
           isPasskey,
           isSelf: true,
           config: ownConfig,
+          probationEndsAt: null,
         },
       ]
     }
@@ -782,6 +795,8 @@ export class NativeAccountProvider implements CofferdamProvider {
       const tier = TIER_BY_ENUM[Number(tierNum)]
       if (!tier) continue // Tier.None — skip.
       const isPasskey = module.toLowerCase() === passkeyModule
+      // Only a High can be probationary; the getter is 0 for every other tier.
+      const probationEnd = tier === 'high' ? Number((await account.probationEndsAt(id)) as bigint) : 0
       records.push({
         id,
         module,
@@ -791,6 +806,7 @@ export class NativeAccountProvider implements CofferdamProvider {
         isPasskey,
         isSelf: config.toLowerCase() === ownConfig,
         config,
+        probationEndsAt: probationEnd > 0 ? probationEnd : null,
       })
     }
     return records

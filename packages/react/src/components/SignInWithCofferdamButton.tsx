@@ -7,9 +7,11 @@
 // markup.
 //
 // The default styling mimics "Sign in with Apple" / "Sign in with Google"
-// look-and-feel — pill-shaped, brand colour, white text. Consumer apps can
-// override via `className` or `style`, or pass `children` for a fully custom
-// label.
+// look-and-feel — rounded, brand colour, white text. The brand colour is Base
+// Blue (#0000FF), the only accent that holds 4.5:1 with white text and as text
+// on a light page; set `--cofferdam-brand` on any ancestor to retheme it.
+// Consumer apps can also override via `className` or `style`, or pass
+// `children` for a fully custom label.
 
 import type { CSSProperties, ReactNode } from 'react'
 import type { SignInPolicy, SignInResponse } from '@cofferdam/sdk'
@@ -28,6 +30,9 @@ export interface SignInWithCofferdamButtonProps {
   disabled?: boolean
 }
 
+/** Base Blue; override with the `--cofferdam-brand` CSS custom property. */
+const BRAND = 'var(--cofferdam-brand, #0000ff)'
+
 const DEFAULT_STYLE: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -35,8 +40,8 @@ const DEFAULT_STYLE: CSSProperties = {
   gap: '0.5rem',
   padding: '0.625rem 1rem',
   borderRadius: '0.5rem',
-  border: '1px solid #0a66c2',
-  background: '#0a66c2',
+  border: `1px solid ${BRAND}`,
+  background: BRAND,
   color: '#ffffff',
   fontWeight: 600,
   fontSize: '0.938rem',
@@ -73,7 +78,7 @@ export function SignInWithCofferdamButton({
           alignItems: 'center',
           gap: '0.5rem',
           fontSize: '0.875rem',
-          color: '#0a66c2',
+          color: BRAND,
           ...style,
         }}
       >
@@ -85,7 +90,7 @@ export function SignInWithCofferdamButton({
           style={{
             border: 'none',
             background: 'transparent',
-            color: '#0a66c2',
+            color: BRAND,
             cursor: 'pointer',
             textDecoration: 'underline',
             padding: 0,

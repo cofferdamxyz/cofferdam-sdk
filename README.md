@@ -67,7 +67,7 @@ await provider.ensureDeployed()                    // first sponsored op carries
 await provider.sendTransaction({ to, data })       // execute(to, value, data), signed and relayed
 ```
 
-Device management on the same provider: `listAuthorities()`, `addBackupPasskey(publicKey)` (up to 3 passkeys), `revokeAuthority(id)` (the last passkey cannot be revoked), `resolveOwnAuthorityId()`. `createDeviceHandoff` and `decodeAndVerifyDeviceHandoff` encode and check the `cdh1:` QR a new device shows to an existing one.
+Device management on the same provider: `listAuthorities()` (each record carries its tier, including `partner`, and a High's `probationEndsAt` in unix seconds, or `null`), `addBackupPasskey(publicKey)` (up to 3 passkeys), `revokeAuthority(id)` (the last passkey cannot be revoked), `resolveOwnAuthorityId()`. `createDeviceHandoff` and `decodeAndVerifyDeviceHandoff` encode and check the `cdh1:` QR a new device shows to an existing one.
 
 Contract addresses are configuration; the SDK holds no address table. The Base Sepolia deployment is in [`cofferdamxyz/base-contracts`](https://github.com/cofferdamxyz/base-contracts) under `deployments/baseSepolia.json`.
 

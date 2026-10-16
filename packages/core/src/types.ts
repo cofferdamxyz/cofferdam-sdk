@@ -61,6 +61,8 @@ export interface VerifiedClaims {
  * - 'password'      — a consumer's local password login.
  * - 'oauth_google' / 'oauth_apple' — a consumer's social OAuth login.
  * - 'polis_sso'     — an enterprise Polis SSO session (managed authority).
+ * - 'partner_passkey' — the user's own passkey on a partner app's RP
+ *                     (`PartnerPasskeyAuthority`; decision 0016).
  */
 export type AuthorityKind =
   | 'passkey'
@@ -68,6 +70,7 @@ export type AuthorityKind =
   | 'oauth_google'
   | 'oauth_apple'
   | 'polis_sso'
+  | 'partner_passkey'
 
 /**
  * Authority tier on the smart account (AA):
@@ -79,8 +82,12 @@ export type AuthorityKind =
  *                     authority. NOT ratchet-locked; upgraded via the
  *                     enterprise addAuthority OR-semantics path (§3.10), never
  *                     via the consumer ratchet.
+ * - 'partner'       — the user's own passkey on a partner app's RP: scoped job
+ *                     calls from its `Permission`, zero value, no authority
+ *                     changes, no ERC-1271 (decision 0016). Mirrors on-chain
+ *                     `Tier.Partner` (4).
  */
-export type AuthorityTier = 'high' | 'low_untrusted' | 'low_managed'
+export type AuthorityTier = 'high' | 'low_untrusted' | 'low_managed' | 'partner'
 
 /** Mirror of the consumer-side `wallet.migrationStatus` (retired ratchet model; code debt). */
 export type MigrationStatus = 'pending' | 'enrolled' | 'declined'

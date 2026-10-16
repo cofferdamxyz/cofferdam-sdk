@@ -28,6 +28,8 @@ export function tierOf(kind: AuthorityKind): AuthorityTier {
       return 'high'
     case 'polis_sso':
       return 'low_managed'
+    case 'partner_passkey':
+      return 'partner'
     case 'password':
     case 'oauth_google':
     case 'oauth_apple':
