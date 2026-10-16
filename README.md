@@ -75,7 +75,7 @@ The passkey module verifies passkeys for the `cofferdam.xyz` relying party, so t
 
 ## Verify a session attestation on your server
 
-`SignInResponse.attestation` is a `csa1:` token: the user's passkey signing the scope, pseudonym, account, chain id, verified flag and issue time.
+`SignInResponse.attestation` is a `csa1:` token: the user's passkey signing the scope, pseudonym, account, chain id, whether the account was Self-bound on-chain at sign-in, and the issue time.
 
 ```ts
 import { decodeAndVerifySessionAttestation } from '@cofferdam/sdk'

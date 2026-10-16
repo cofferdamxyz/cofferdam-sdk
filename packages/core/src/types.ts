@@ -178,7 +178,19 @@ export interface SignInResponse {
    */
   accountAddress: string
 
+  /**
+   * Whether a Self.xyz passport is bound to the account. `NativeAccountProvider`
+   * reads `NullifierRegistry.isAccountBound(account)` at sign-in and signs the
+   * answer into `attestation` (false without `contracts.nullifierRegistry`);
+   * `MockProvider` returns its fixture. A relying party that depends on the
+   * binding reads the registry itself.
+   */
   verified: boolean
+  /**
+   * Nationality, age and OFAC claims. Always `null` from `NativeAccountProvider`:
+   * they are not on-chain and the plane does not issue them yet. `MockProvider`
+   * returns its fixture.
+   */
   verifiedClaims: VerifiedClaims | null
 
   /** Per-consumer-app encryption sub-key. */

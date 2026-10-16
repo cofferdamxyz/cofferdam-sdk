@@ -200,10 +200,14 @@ describe('NativeAccountProvider (integration)', () => {
     expect(await chain.getBalance(accountAddress)).toBe(0n)
   }, 90_000)
 
-  it('signIn() rejects a user excluded by policy.allowedCountries', async () => {
+  it('signIn() reports verified=false without a registry, and policies that need claims fail closed', async () => {
     if (skip) return
 
-    const provider = mkProvider(`nap-policy-${Date.now()}`, { verifiedClaims: { country: 'BR' } })
+    const provider = mkProvider(`nap-policy-${Date.now()}`)
+    const result = await provider.signIn({})
+    expect(result.verified).toBe(false)
+    expect(result.verifiedClaims).toBeNull()
+    await expect(provider.signIn({ enforceSelfBeforeAccount: true })).rejects.toBeInstanceOf(SignInRejected)
     await expect(provider.signIn({ allowedCountries: ['US'] })).rejects.toBeInstanceOf(SignInRejected)
   }, 30_000)
 

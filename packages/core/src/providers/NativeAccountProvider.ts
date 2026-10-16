@@ -25,6 +25,11 @@
 //      `initCode` and the plane's relayer submits it (`relayerUrl`). The PoC
 //      `deployerPrivateKey` path (direct factory call + self-bundling) stays for
 //      local chains and tests.
+//   5. Read `NullifierRegistry.isAccountBound(account)` for the `verified`
+//      flag when `contracts.nullifierRegistry` is configured. The client never
+//      asserts a Self claim it did not read: `verifiedClaims` is always null
+//      here (nationality, age and OFAC are not on-chain; the plane does not
+//      issue them yet).
 //
 // `sendTransaction()` builds an ERC-4337 PackedUserOperation, signs the
 // userOpHash with the passkey, and submits via `EntryPoint.handleOps()`.
@@ -98,12 +103,14 @@ import type {
   SignInErrorCode,
   SignInPolicy,
   SignInResponse,
-  VerifiedClaims,
 } from '../types.js'
 
 export { SignInRejected } from './MockProvider.js'
 
 const abi = AbiCoder.defaultAbiCoder()
+
+/** The one `NullifierRegistry` read `signIn()` makes. */
+const NULLIFIER_REGISTRY_ABI = ['function isAccountBound(address account) view returns (bool)'] as const
 
 /** Canonical ERC-4337 EntryPoint v0.7 address on Base. */
 const ENTRY_POINT_ADDRESS = '0x0000000071727De22E5E9d8BAf0edAc6f37da032'
@@ -258,6 +265,12 @@ export interface NativeAccountProviderConfig {
      * Override only for testing on non-Base chains.
      */
     entryPoint?: string
+    /**
+     * `NullifierRegistry` address. When set, `signIn()` reads
+     * `isAccountBound(account)` and signs that answer into the `csa1:` token as
+     * `verified`. Without it `verified` is always false.
+     */
+    nullifierRegistry?: string
   }
 
   /** Stable per-user id → deterministic CREATE2 salt (and PoC passkey). */
@@ -328,8 +341,6 @@ export interface NativeAccountProviderConfig {
   /** Gas limit for AA txs when estimation is skipped/fails. Default 20_000_000. */
   defaultGasLimit?: bigint
 
-  verified?: boolean
-  verifiedClaims?: Partial<VerifiedClaims>
   latencyMs?: number
 }
 
@@ -343,6 +354,7 @@ interface ResolvedConfig {
     passkeyModule: string
     paymaster?: string
     entryPoint: string
+    nullifierRegistry: string | null
   }
   userId: string
   deployerPrivateKey: string | null
@@ -352,8 +364,6 @@ interface ResolvedConfig {
   authorityId: number
   autoDeploy: boolean
   defaultGasLimit: bigint
-  verified: boolean
-  verifiedClaims: VerifiedClaims
   latencyMs: number
   genesis: GenesisAuthorityConfig
   genesisPermission: Permission
@@ -403,6 +413,7 @@ export class NativeAccountProvider implements CofferdamProvider {
         passkeyModule: config.contracts.passkeyModule,
         paymaster: config.contracts.paymaster,
         entryPoint: config.contracts.entryPoint ?? ENTRY_POINT_ADDRESS,
+        nullifierRegistry: config.contracts.nullifierRegistry ?? null,
       },
       userId: config.userId ?? 'native-user-default',
       deployerPrivateKey: config.deployerPrivateKey ?? null,
@@ -412,14 +423,6 @@ export class NativeAccountProvider implements CofferdamProvider {
       authorityId: config.authorityId ?? 0,
       autoDeploy: config.autoDeploy ?? false,
       defaultGasLimit: config.defaultGasLimit ?? 20_000_000n,
-      verified: config.verified ?? true,
-      verifiedClaims: {
-        country: 'BR',
-        olderThan: 18,
-        ofacClear: true,
-        proofTimestamp: Date.now(),
-        ...config.verifiedClaims,
-      },
       latencyMs: config.latencyMs ?? 0,
       genesis,
       genesisPermission: config.genesisPermission ?? NO_PERMISSION,
@@ -437,9 +440,12 @@ export class NativeAccountProvider implements CofferdamProvider {
 
   async signIn(policy: SignInPolicy): Promise<SignInResponse> {
     await sleep(this.config.latencyMs)
-    this.enforcePolicy(policy)
 
     const accountAddress = await this.getAccountAddress()
+    // A registry fact, never a configuration default: false without a registry
+    // address or when the read fails, so the client never over-claims.
+    const verified = await this.isAccountBound(accountAddress)
+    this.enforcePolicy(policy, verified)
 
     let deployed = await this.isDeployed()
     if (!deployed && this.config.autoDeploy) {
@@ -460,7 +466,7 @@ export class NativeAccountProvider implements CofferdamProvider {
       appPseudonym,
       accountAddress,
       chainId: this.config.chainId,
-      verified: this.config.verified,
+      verified,
       issuedAt,
     }
     // The attestation binds the security-relevant response fields to the genesis
@@ -482,8 +488,10 @@ export class NativeAccountProvider implements CofferdamProvider {
     return {
       appPseudonym,
       accountAddress,
-      verified: this.config.verified,
-      verifiedClaims: this.config.verified ? this.config.verifiedClaims : null,
+      verified,
+      // Nationality, age and OFAC claims are not on-chain and the plane does not
+      // issue them yet; the native provider never asserts what it did not read.
+      verifiedClaims: null,
       scopeKey,
       sessionToken: encodeSessionToken({
         scope: this.config.scope,
@@ -972,24 +980,38 @@ export class NativeAccountProvider implements CofferdamProvider {
     return `csa-sess1.${bytesToBase64url(bytes)}.${sig}`
   }
 
-  private enforcePolicy(policy: SignInPolicy): void {
-    const country = this.config.verifiedClaims.country
-    if (policy.allowedCountries && country && !policy.allowedCountries.includes(country)) {
-      throw new SignInRejected(
-        'country_blocked' as SignInErrorCode,
-        `[cofferdam-sdk] native user country '${country}' not in allowedCountries: ${policy.allowedCountries.join(',')}`,
-      )
+  /**
+   * `NullifierRegistry.isAccountBound(account)`: whether a Self.xyz passport is
+   * bound to this account on-chain. False when no registry address is
+   * configured or the read fails, so a verifier is never told more than the
+   * chain says.
+   */
+  async isAccountBound(accountAddress?: string): Promise<boolean> {
+    const registry = this.config.contracts.nullifierRegistry
+    if (!registry) return false
+    try {
+      const address = accountAddress ?? (await this.getAccountAddress())
+      const contract = new EthContract(registry, NULLIFIER_REGISTRY_ABI as unknown as string[], this.chainProvider)
+      return Boolean(await contract.isAccountBound(address))
+    } catch {
+      return false
     }
-    if (policy.blockedCountries && country && policy.blockedCountries.includes(country)) {
-      throw new SignInRejected(
-        'country_blocked' as SignInErrorCode,
-        `[cofferdam-sdk] native user country '${country}' is in blockedCountries`,
-      )
-    }
-    if (policy.enforceSelfBeforeAccount && !this.config.verified) {
+  }
+
+  private enforcePolicy(policy: SignInPolicy, verified: boolean): void {
+    // The native provider holds no nationality, age or OFAC claim (none is
+    // on-chain, and the plane does not issue them yet), so a policy that needs
+    // one cannot be satisfied honestly: fail closed rather than pass silently.
+    if (policy.allowedCountries || policy.blockedCountries || policy.requireClaims) {
       throw new SignInRejected(
         'self_verification_failed' as SignInErrorCode,
-        '[cofferdam-sdk] native user is unverified and policy requires Self before account',
+        '[cofferdam-sdk] country and claim policies need Self claims the native provider does not hold; only the on-chain binding (`verified`) is known',
+      )
+    }
+    if (policy.enforceSelfBeforeAccount && !verified) {
+      throw new SignInRejected(
+        'self_verification_failed' as SignInErrorCode,
+        '[cofferdam-sdk] the account is not Self-bound and the policy requires Self before account',
       )
     }
   }
