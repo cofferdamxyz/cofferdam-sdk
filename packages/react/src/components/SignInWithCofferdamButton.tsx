@@ -6,11 +6,12 @@
 // surface should use `useSignInWithCofferdam()` directly and render their own
 // markup.
 //
-// The default styling mimics "Sign in with Apple" / "Sign in with Google"
-// look-and-feel — rounded, brand colour, white text. The brand colour is Base
-// Blue (#0000FF), the only accent that holds 4.5:1 with white text and as text
-// on a light page; set `--cofferdam-brand` on any ancestor to retheme it.
-// Consumer apps can also override via `className` or `style`, or pass
+// The default styling follows the Cofferdam brand's primary action: a solid
+// near-black fill with a white label, zero chroma (the accent never fills a
+// primary button, and Base Blue is forbidden on dark pages). On a dark page set
+// `--cofferdam-button-bg: #ffffff` and `--cofferdam-button-fg: #000000` on any
+// ancestor to get the dark-mode pair, or `--cofferdam-button-border` to outline
+// it. Consumer apps can also override via `className` or `style`, or pass
 // `children` for a fully custom label.
 
 import type { CSSProperties, ReactNode } from 'react'
@@ -30,8 +31,10 @@ export interface SignInWithCofferdamButtonProps {
   disabled?: boolean
 }
 
-/** Base Blue; override with the `--cofferdam-brand` CSS custom property. */
-const BRAND = 'var(--cofferdam-brand, #0000ff)'
+/** Primary action: near-black fill, white label (brand `fg` fill / `bg` label in light). Themable per page. */
+const BG = 'var(--cofferdam-button-bg, #1a1a1a)'
+const FG = 'var(--cofferdam-button-fg, #ffffff)'
+const BORDER = 'var(--cofferdam-button-border, var(--cofferdam-button-bg, #1a1a1a))'
 
 const DEFAULT_STYLE: CSSProperties = {
   display: 'inline-flex',
@@ -40,9 +43,9 @@ const DEFAULT_STYLE: CSSProperties = {
   gap: '0.5rem',
   padding: '0.625rem 1rem',
   borderRadius: '0.5rem',
-  border: `1px solid ${BRAND}`,
-  background: BRAND,
-  color: '#ffffff',
+  border: `1px solid ${BORDER}`,
+  background: BG,
+  color: FG,
   fontWeight: 600,
   fontSize: '0.938rem',
   cursor: 'pointer',
@@ -78,7 +81,6 @@ export function SignInWithCofferdamButton({
           alignItems: 'center',
           gap: '0.5rem',
           fontSize: '0.875rem',
-          color: BRAND,
           ...style,
         }}
       >
@@ -90,7 +92,7 @@ export function SignInWithCofferdamButton({
           style={{
             border: 'none',
             background: 'transparent',
-            color: BRAND,
+            color: 'inherit',
             cursor: 'pointer',
             textDecoration: 'underline',
             padding: 0,
