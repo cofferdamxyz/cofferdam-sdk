@@ -1,0 +1,1 @@
+{"version":3,"file":"permission.js","sourceRoot":"","sources":["../../src/providers/permission.ts"],"names":[],"mappings":"AAkBA,+EAA+E;AAC/E,MAAM,CAAC,MAAM,aAAa,GAAe;IACvC,OAAO,EAAE,EAAE;IACX,SAAS,EAAE,EAAE;IACb,UAAU,EAAE,EAAE;IACd,aAAa,EAAE,EAAE;IACjB,QAAQ,EAAE,EAAE;IACZ,MAAM,EAAE,CAAC;CACV,CAAA;AAED,0DAA0D;AAC1D,MAAM,CAAC,MAAM,gBAAgB,GAC3B,wHAAwH,CAAA"}
