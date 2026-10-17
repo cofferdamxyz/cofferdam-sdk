@@ -116,6 +116,8 @@ import { CofferdamProvider, SignInWithCofferdamButton } from '@cofferdam/sdk-rea
 </CofferdamProvider>
 ```
 
+`SignInWithCofferdamButton` is the Cofferdam brand's primary button (near-black with a white label on light pages, white with black on dark ones, following `prefers-color-scheme` or a `[data-theme]` ancestor). Set `--cofferdam-button-bg` and `--cofferdam-button-fg` to override the pair, pass `fullWidth`, a `leadingIcon` or a CSP `nonce`.
+
 `network: 'mock'` builds a `MockProvider`; any other network takes a `provider` in the config. `useFunderPicker` keeps recent funder addresses in `localStorage` and works on the web only.
 
 ## Development without a chain
