@@ -155,7 +155,8 @@ Some exported names (`upgradeToPasskey`, the `low_untrusted` tier, `allowInBrows
 yarn install
 yarn build      # tsc -b, all packages
 yarn test       # vitest run
-yarn typecheck  # packages and the example
+yarn typecheck  # packages, their tests (tsconfig.test.json) and the example
+yarn lint       # typescript-eslint, type-checked (eslint.config.mjs)
 ```
 
 Node 24 (`.nvmrc`), yarn 1. The account and local-chain integration tests run against a local Base node at `127.0.0.1:8545` (chain 31337) with the contracts from `base-contracts` deployed (`yarn deploy:local`); without it they skip. Set `COFFERDAM_LOCAL_INTEGRATION=1` to make a missing node fail the run.

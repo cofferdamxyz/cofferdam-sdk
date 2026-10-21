@@ -37,7 +37,7 @@ export interface SignInPolicy {
    * ⇒ the SDK prefers the QR handoff to the Cofferdam RN app (the canonical,
    * portable key).
    */
-  allowInBrowserPasskey?: boolean
+  allowInBrowserPasskey?: boolean | undefined
 }
 
 export interface VerifiedClaims {

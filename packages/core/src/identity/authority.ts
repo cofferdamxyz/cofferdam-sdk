@@ -60,7 +60,7 @@ export const DEFAULT_DEVICE_CAPABILITY: DeviceCapability = {
 
 export interface LanePolicy {
   /** See SignInPolicy.allowInBrowserPasskey. */
-  allowInBrowserPasskey?: boolean
+  allowInBrowserPasskey?: boolean | undefined
 }
 
 /**

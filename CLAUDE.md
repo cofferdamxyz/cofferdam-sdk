@@ -11,7 +11,7 @@ present, and the `rules/<area>.md` for the area you touch.
 
 ## Validate here
 
-`yarn test` and `yarn typecheck`; `yarn build` before checking anything that
+`yarn test`, `yarn typecheck` and `yarn lint`; `yarn build` before checking anything that
 consumes `dist/`.
 
 ## Delegated git (cloud session, Projects thread, Lockkeeper)

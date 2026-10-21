@@ -19,6 +19,7 @@ The SDK is built feature-by-feature, driven by consumer needs. Partial contract 
 
 - No address table: addresses come from the caller's configuration. The decision 0025 generation table is the one planned exception.
 - Hash with `@noble/hashes`; never WebCrypto (Hermes has none).
+- TypeScript runs with `exactOptionalPropertyTypes`, `noUnusedLocals` / `noUnusedParameters` and `verbatimModuleSyntax` (`tsconfig.base.json`), and the tests are typechecked (`tsconfig.test.json`). An optional field a caller may pass as `undefined` is typed `field?: T | undefined`. ESLint (`eslint.config.mjs`) only warns on the `any` from ethers `Contract` methods in `packages/core/src/escrow/` until those clients are typed.
 - Integrators resolve users by handle and never store an account address (decision 0025); new surfaces must not hand one to a consumer app.
 - The `enrollFirstHigh` client, `csa1:` v2 and the address-set derivation are planned; see `docs/architecture/sdk.md` in the workspace.
 

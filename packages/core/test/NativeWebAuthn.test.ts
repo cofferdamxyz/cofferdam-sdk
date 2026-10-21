@@ -133,7 +133,6 @@ describe('NativeAccountProvider with WebAuthn passkey (integration)', () => {
         ? `base-anvil not reachable at ${RPC_URL}`
         : 'WebAuthn ERC-4337 stack missing from localhost.json — run yarn deploy:local'
       if (FORCE) throw new Error(`[NativeWebAuthn integration] ${reason}`)
-      // eslint-disable-next-line no-console
       console.warn(`[NativeWebAuthn integration] skipping: ${reason}`)
       return
     }
