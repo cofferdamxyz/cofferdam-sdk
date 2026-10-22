@@ -117,8 +117,8 @@ export function verifyPopProof(
   let header: Record<string, unknown>
   let payload: Record<string, unknown>
   try {
-    header = JSON.parse(new TextDecoder().decode(base64urlToBytes(parts[0]!)))
-    payload = JSON.parse(new TextDecoder().decode(base64urlToBytes(parts[1]!)))
+    header = JSON.parse(new TextDecoder().decode(base64urlToBytes(parts[0]!))) as Record<string, unknown>
+    payload = JSON.parse(new TextDecoder().decode(base64urlToBytes(parts[1]!))) as Record<string, unknown>
   } catch {
     throw new PopProofError('[cofferdam-sdk] proof header or payload is not base64url JSON.')
   }
@@ -134,7 +134,7 @@ export function verifyPopProof(
   const sig = base64urlToBytes(parts[2]!)
   const digest = sha256(utf8ToBytes(`${parts[0]}.${parts[1]}`))
   const point = getBytes(concat(['0x04', pub.qx, pub.qy]))
-  let valid = false
+  let valid: boolean
   try {
     valid = sig.length === 64 && p256.verify(sig, digest, point, { lowS: false })
   } catch {

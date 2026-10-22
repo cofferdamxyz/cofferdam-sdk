@@ -357,8 +357,9 @@ export function sessionAttestationVersion(token: string): number {
     throw new SessionAttestationDecodeError('[cofferdam-sdk] not a Cofferdam session-attestation token.')
   }
   try {
-    const parsed = JSON.parse(new TextDecoder().decode(base64urlToBytes(token.slice(PREFIX.length))))
-    return typeof parsed?.v === 'number' ? parsed.v : 0
+    const parsed = JSON.parse(new TextDecoder().decode(base64urlToBytes(token.slice(PREFIX.length)))) as unknown
+    const v = parsed !== null && typeof parsed === 'object' ? (parsed as { v?: unknown }).v : undefined
+    return typeof v === 'number' ? v : 0
   } catch {
     throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation payload is not valid base64url JSON.')
   }
