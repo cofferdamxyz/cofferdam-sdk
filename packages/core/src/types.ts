@@ -4,6 +4,9 @@
 // `docs/architecture/sdk.md`. v0.x is pre-stable; the API may change between
 // minor versions.
 
+import type { DeviceKeySigner } from './identity/deviceKey.js'
+import type { SessionTier } from './identity/sessionAttestation.js'
+
 export type NetworkMode = 'mock' | 'local' | 'testnet' | 'mainnet'
 
 /** ISO-3166 alpha-2 country code (e.g. 'BR', 'US', 'NG'). */
@@ -38,6 +41,25 @@ export interface SignInPolicy {
    * portable key).
    */
   allowInBrowserPasskey?: boolean
+  /**
+   * Mint a device-bound `csa1:` v2 token (workspace decision 0055) instead of a
+   * v1 bearer token: the passkey signs an envelope naming `deviceKey`, and every
+   * request then carries a proof that key signs (`createPopProof`). Passkey
+   * genesis only; the session-signer lane keeps `csa-sess1.`.
+   */
+  session?: SignInSessionRequest
+}
+
+/** What a device-bound `csa1:` v2 session is minted for (workspace decision 0055). */
+export interface SignInSessionRequest {
+  /** `fast` for everyday features (up to 24 h), `slow` for one security-critical action (up to 10 min). */
+  tier: SessionTier
+  /** The key every request of this session is signed with; fresh at each passkey assertion. */
+  deviceKey: DeviceKeySigner
+  /** Who may accept the token. Defaults to the plane (`cofferdam-plane`). */
+  audience?: string
+  /** Lifetime in milliseconds, capped by the tier. Defaults to the tier's cap. */
+  ttlMs?: number
 }
 
 export interface VerifiedClaims {

@@ -242,6 +242,226 @@ export function decodeAndVerifySessionAttestation(
   return att
 }
 
+// ── v2: device-bound, tiered, expiring (workspace decision 0055) ─────────────
+
+/** Wire-format version of the device-bound envelope. */
+export const SESSION_ATTESTATION_V2 = 2
+
+/** Domain separator of the v2 digest. */
+const DIGEST_DOMAIN_V2 = 'cofferdam-session-attestation-v2'
+
+/** The audience of tokens the Cofferdam plane accepts. */
+export const CSA_AUDIENCE_PLANE = 'cofferdam-plane'
+
+/** Fast: everyday features, minted lazily and reused. Slow: one security-critical action. */
+export type SessionTier = 'fast' | 'slow'
+
+/** The longest lifetime a verifier accepts for each tier. */
+export const SESSION_TIER_MAX_LIFETIME_MS: Readonly<Record<SessionTier, number>> = {
+  fast: 24 * 60 * 60 * 1000,
+  slow: 10 * 60 * 1000,
+}
+
+const JKT_RE = /^[A-Za-z0-9_-]{43}$/
+
+/** The fields the passkey commits to in a v2 envelope. */
+export interface SessionAttestationV2Fields extends SessionAttestationFields {
+  /** Unix epoch milliseconds after which the token is refused. */
+  expiresAt: number
+  /** Who may accept the token (`CSA_AUDIENCE_PLANE` for the plane). */
+  aud: string
+  /** Which routes the token opens. */
+  tier: SessionTier
+  /** RFC 7638 thumbprint of the device key every request must be signed with. */
+  jkt: string
+}
+
+/** A decoded v2 envelope. On the wire `jkt` sits under `cnf`. */
+export interface SessionAttestationV2 extends Omit<SessionAttestationV2Fields, 'jkt'> {
+  v: 2
+  alg: PasskeySignatureScheme
+  publicKey: P256PublicKey
+  cnf: { jkt: string }
+  sig: string
+}
+
+/** The 32-byte digest the passkey signs for a v2 envelope. */
+export function sessionAttestationV2Digest(f: SessionAttestationV2Fields, publicKey: P256PublicKey): Uint8Array {
+  const jkt = base64urlToBytes(f.jkt)
+  if (jkt.length !== 32) throw new SessionAttestationDecodeError('[cofferdam-sdk] jkt must be a 32-byte thumbprint.')
+  const encoded = abi.encode(
+    [
+      'string', 'string', 'string', 'address', 'uint256', 'bool', 'uint64', 'uint64',
+      'string', 'string', 'bytes32', 'bytes32', 'bytes32',
+    ],
+    [
+      DIGEST_DOMAIN_V2,
+      f.scope,
+      f.appPseudonym,
+      f.accountAddress,
+      BigInt(f.chainId),
+      f.verified,
+      BigInt(f.issuedAt),
+      BigInt(f.expiresAt),
+      f.aud,
+      f.tier,
+      jkt,
+      publicKey.qx,
+      publicKey.qy,
+    ],
+  )
+  return getBytes(keccak256(encoded))
+}
+
+/** Build and sign a v2 envelope. Prompts the passkey (biometric in production). */
+export async function createSessionAttestationV2(args: {
+  signer: PasskeySigner
+  fields: SessionAttestationV2Fields
+  publicKey?: P256PublicKey
+}): Promise<SessionAttestationV2> {
+  const { jkt, ...rest } = args.fields
+  if (rest.expiresAt - rest.issuedAt > SESSION_TIER_MAX_LIFETIME_MS[rest.tier] || rest.expiresAt <= rest.issuedAt) {
+    throw new SessionAttestationVerificationError(
+      `[cofferdam-sdk] a ${rest.tier} session may live at most ${SESSION_TIER_MAX_LIFETIME_MS[rest.tier]} ms.`,
+    )
+  }
+  const publicKey = args.publicKey ?? (await args.signer.publicKey())
+  const sig = await args.signer.sign(sessionAttestationV2Digest(args.fields, publicKey))
+  return {
+    v: SESSION_ATTESTATION_V2,
+    alg: args.signer.scheme ?? 'p256',
+    publicKey,
+    ...rest,
+    cnf: { jkt },
+    sig,
+  }
+}
+
+/** Serialize a v2 envelope into its `csa1:` token. */
+export function encodeSessionAttestationV2(att: SessionAttestationV2): string {
+  return PREFIX + bytesToBase64url(new TextEncoder().encode(JSON.stringify(att)))
+}
+
+/** Convenience: `encodeSessionAttestationV2(await createSessionAttestationV2(...))`. */
+export async function signSessionAttestationV2(args: {
+  signer: PasskeySigner
+  fields: SessionAttestationV2Fields
+  publicKey?: P256PublicKey
+}): Promise<string> {
+  return encodeSessionAttestationV2(await createSessionAttestationV2(args))
+}
+
+/** The version of a `csa1:` token (1 or 2), without verifying it. */
+export function sessionAttestationVersion(token: string): number {
+  if (typeof token !== 'string' || !token.startsWith(PREFIX)) {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] not a Cofferdam session-attestation token.')
+  }
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(base64urlToBytes(token.slice(PREFIX.length))))
+    return typeof parsed?.v === 'number' ? parsed.v : 0
+  } catch {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation payload is not valid base64url JSON.')
+  }
+}
+
+/** Parse a v2 token into a structurally valid envelope. Does not verify it. */
+export function decodeSessionAttestationV2(token: string): SessionAttestationV2 {
+  if (typeof token !== 'string' || !token.startsWith(PREFIX)) {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] not a Cofferdam session-attestation token.')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(base64urlToBytes(token.slice(PREFIX.length))))
+  } catch {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation payload is not valid base64url JSON.')
+  }
+  const o = (parsed ?? {}) as Record<string, unknown>
+  if (o.v !== SESSION_ATTESTATION_V2) {
+    throw new SessionAttestationDecodeError(`[cofferdam-sdk] expected a v2 session attestation, got ${String(o.v)}.`)
+  }
+  const base = assertWellFormed({ ...o, v: SESSION_ATTESTATION_VERSION })
+  const cnf = o.cnf as Record<string, unknown> | undefined
+  if (!cnf || typeof cnf.jkt !== 'string' || !JKT_RE.test(cnf.jkt)) {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation cnf.jkt is missing or malformed.')
+  }
+  if (typeof o.expiresAt !== 'number' || !Number.isFinite(o.expiresAt) || o.expiresAt <= 0) {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation expiresAt is missing or invalid.')
+  }
+  if (typeof o.aud !== 'string' || o.aud.length === 0) {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation aud is missing.')
+  }
+  if (o.tier !== 'fast' && o.tier !== 'slow') {
+    throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation tier must be fast or slow.')
+  }
+  const { v: _v, ...fields } = base
+  return { v: SESSION_ATTESTATION_V2, ...fields, expiresAt: o.expiresAt, aud: o.aud, tier: o.tier, cnf: { jkt: cnf.jkt } }
+}
+
+/**
+ * Verify a v2 envelope: lifetime within the tier's cap, not expired, not issued
+ * in the future (60 s of skew), the audience, the optional field pins, and the
+ * passkey signature. Device possession is checked separately (`verifyPopProof`).
+ */
+export function verifySessionAttestationV2(
+  att: SessionAttestationV2,
+  opts: { audience?: string; expect?: SessionAttestationExpectation; now?: number } = {},
+): void {
+  const now = opts.now ?? Date.now()
+  const cap = SESSION_TIER_MAX_LIFETIME_MS[att.tier]
+  if (att.expiresAt <= att.issuedAt || att.expiresAt - att.issuedAt > cap) {
+    throw new SessionAttestationVerificationError(
+      `[cofferdam-sdk] a ${att.tier} session attestation may live at most ${cap} ms.`,
+    )
+  }
+  if (now >= att.expiresAt || att.issuedAt - now > 60_000) {
+    throw new SessionAttestationExpiredError(
+      `[cofferdam-sdk] session attestation is expired or clock-skewed (issuedAt=${att.issuedAt}, expiresAt=${att.expiresAt}, now=${now}).`,
+    )
+  }
+  const audience = opts.audience ?? CSA_AUDIENCE_PLANE
+  if (att.aud !== audience) {
+    throw new SessionAttestationVerificationError(
+      `[cofferdam-sdk] session attestation aud mismatch (expected ${audience}, got ${att.aud}).`,
+    )
+  }
+  if (opts.expect) {
+    // Reuse v1's field pins; freshness is already checked above.
+    const pinned = { ...att, v: SESSION_ATTESTATION_VERSION } as unknown as SessionAttestation
+    for (const key of ['scope', 'appPseudonym', 'accountAddress', 'chainId'] as const) {
+      const want = opts.expect[key]
+      if (want === undefined) continue
+      const got = pinned[key]
+      const matches =
+        key === 'accountAddress' ? String(got).toLowerCase() === String(want).toLowerCase() : got === want
+      if (!matches) {
+        throw new SessionAttestationVerificationError(
+          `[cofferdam-sdk] session attestation ${key} mismatch (expected ${String(want)}, got ${String(got)}).`,
+        )
+      }
+    }
+  }
+  const digest = sessionAttestationV2Digest({ ...att, jkt: att.cnf.jkt }, att.publicKey)
+  const ok =
+    att.alg === 'webauthn'
+      ? verifyWebAuthnAssertion(att.sig, digest, att.publicKey)
+      : verifyP256Digest(att.publicKey, digest, att.sig)
+  if (!ok) {
+    throw new SessionAttestationVerificationError(
+      '[cofferdam-sdk] session attestation signature failed: not signed by the presented passkey.',
+    )
+  }
+}
+
+/** Convenience: decode + verify a v2 token, returning the trusted envelope. */
+export function decodeAndVerifySessionAttestationV2(
+  token: string,
+  opts?: { audience?: string; expect?: SessionAttestationExpectation; now?: number },
+): SessionAttestationV2 {
+  const att = decodeSessionAttestationV2(token)
+  verifySessionAttestationV2(att, opts)
+  return att
+}
+
 function assertWellFormed(p: unknown): SessionAttestation {
   if (!p || typeof p !== 'object') {
     throw new SessionAttestationDecodeError('[cofferdam-sdk] session-attestation payload is not an object.')

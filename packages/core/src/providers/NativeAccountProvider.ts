@@ -85,7 +85,13 @@ import {
   type SessionSigner,
 } from '../identity/sessionKey.js'
 import { bytesToBase64url } from '../identity/webauthn.js'
-import { signSessionAttestation } from '../identity/sessionAttestation.js'
+import {
+  CSA_AUDIENCE_PLANE,
+  SESSION_TIER_MAX_LIFETIME_MS,
+  signSessionAttestation,
+  signSessionAttestationV2,
+} from '../identity/sessionAttestation.js'
+import { jwkThumbprint } from '../identity/deviceKey.js'
 import { SignInRejected } from './MockProvider.js'
 import { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './permission.js'
 import { buildInitCode, relayUserOperation, type PackedUserOperation } from './userOpRelay.js'
@@ -485,14 +491,36 @@ export class NativeAccountProvider implements CofferdamProvider {
     // authority: a P-256 passkey envelope (verify with
     // `decodeAndVerifySessionAttestation`) for the passkey lane, or a
     // session-signer ECDSA envelope for the web2-credential lane.
-    const attestation =
-      this.config.genesis.kind === 'session'
-        ? await this.signSessionModeAttestation(fields)
-        : await signSessionAttestation({
-            signer: this.signer,
-            publicKey: await this.publicKey(),
-            fields,
-          })
+    // With `policy.session` the passkey lane mints a device-bound v2 token
+    // (workspace decision 0055): the envelope names the caller's fresh device
+    // key, expires with its tier, and is useless without that key's proofs.
+    let attestation: string
+    if (this.config.genesis.kind === 'session') {
+      if (policy.session) {
+        throw new Error('[cofferdam-sdk] device-bound sessions need a passkey genesis; the session-signer lane signs csa-sess1.')
+      }
+      attestation = await this.signSessionModeAttestation(fields)
+    } else if (policy.session) {
+      const cap = SESSION_TIER_MAX_LIFETIME_MS[policy.session.tier]
+      const ttlMs = Math.min(policy.session.ttlMs ?? cap, cap)
+      attestation = await signSessionAttestationV2({
+        signer: this.signer,
+        publicKey: await this.publicKey(),
+        fields: {
+          ...fields,
+          expiresAt: issuedAt + ttlMs,
+          aud: policy.session.audience ?? CSA_AUDIENCE_PLANE,
+          tier: policy.session.tier,
+          jkt: jwkThumbprint(await policy.session.deviceKey.publicKey()),
+        },
+      })
+    } else {
+      attestation = await signSessionAttestation({
+        signer: this.signer,
+        publicKey: await this.publicKey(),
+        fields,
+      })
+    }
 
     const migrationStatus: MigrationStatus =
       this.config.genesis.kind === 'session' ? 'pending' : 'enrolled'

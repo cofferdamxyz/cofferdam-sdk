@@ -104,7 +104,41 @@ export {
   type SessionAttestation,
   type SessionAttestationFields,
   type SessionAttestationExpectation,
+  // v2: device-bound, tiered, expiring (workspace decision 0055)
+  SESSION_ATTESTATION_V2,
+  CSA_AUDIENCE_PLANE,
+  SESSION_TIER_MAX_LIFETIME_MS,
+  sessionAttestationV2Digest,
+  createSessionAttestationV2,
+  signSessionAttestationV2,
+  encodeSessionAttestationV2,
+  decodeSessionAttestationV2,
+  verifySessionAttestationV2,
+  decodeAndVerifySessionAttestationV2,
+  sessionAttestationVersion,
+  type SessionTier,
+  type SessionAttestationV2,
+  type SessionAttestationV2Fields,
 } from './identity/sessionAttestation.js'
+export {
+  jwkThumbprint,
+  p256Jwk,
+  p256FromJwk,
+  randomBase64url,
+  SoftwareDeviceKeySigner,
+  type DeviceKeySigner,
+  type P256Jwk,
+} from './identity/deviceKey.js'
+export {
+  createPopProof,
+  verifyPopProof,
+  popHtu,
+  popAth,
+  PopProofError,
+  POP_MAX_SKEW_S,
+  POP_TYP,
+  type PopProofClaims,
+} from './identity/popProof.js'
 export { derivePseudonym, deriveScopeKey } from './identity/pseudonym.js'
 export {
   tierOf,
@@ -158,6 +192,7 @@ export type {
   SelectiveClaim,
   SignInErrorCode,
   SignInPolicy,
+  SignInSessionRequest,
   SignInResponse,
   UpgradeReason,
   VerifiedClaims,

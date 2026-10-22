@@ -20,7 +20,7 @@ The SDK is built feature-by-feature, driven by consumer needs. Partial contract 
 - No address table: addresses come from the caller's configuration. The decision 0025 generation table is the one planned exception.
 - Hash with `@noble/hashes`; never WebCrypto (Hermes has none).
 - Integrators resolve users by handle and never store an account address (decision 0025); new surfaces must not hand one to a consumer app.
-- The `enrollFirstHigh` client, `csa1:` v2 and the address-set derivation are planned; see `docs/architecture/sdk.md` in the workspace.
+- `csa1:` v2 (device-bound, decision 0055) is built in `identity/sessionAttestation.ts`, `identity/deviceKey.ts` and `identity/popProof.ts`; regenerate the plane's fixtures with `scripts/gen-attestation-v2-fixtures.mjs` after any change to the digest or the proof. The `enrollFirstHigh` client, v2's `actions[]` and the address-set derivation are planned; see `docs/architecture/sdk.md` in the workspace.
 
 ## Documentation
 

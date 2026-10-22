@@ -90,6 +90,26 @@ const att = decodeAndVerifySessionAttestation(token, {
 
 A valid token proves the holder of `att.publicKey` signed exactly these fields. It does not prove that key controls the account: check that the key is an active authority on the account on-chain (`getAuthority`), or use the Cofferdam plane's `POST /v1/session/verify-attestation` with `checkOnChain: true`. Version 1 has no audience or expiry and its `verified` flag is not a proof of identity verification; bound replay with `maxAgeMs` and `expect`. Do not store `accountAddress`: account addresses change between contract generations.
 
+### Device-bound sessions (version 2)
+
+Pass `session: { tier, deviceKey }` to `signIn` and the passkey signs a version 2 token instead: it expires (`fast` up to 24 hours, `slow` up to 10 minutes), names its audience, and names a device key by its RFC 7638 thumbprint. Every request then carries a proof that key signs, in the shape of RFC 9449 (DPoP), so a copied token is useless without the device:
+
+```ts
+import { createPopProof, decodeAndVerifySessionAttestationV2, verifyPopProof } from '@cofferdam/sdk'
+
+// client: one passkey prompt, then a proof per request
+const { attestation } = await provider.signIn({ session: { tier: 'fast', deviceKey } })
+const dpop = await createPopProof({ deviceKey, htm: 'POST', htu: url, token: attestation })
+// send Authorization: DPoP <attestation> and DPoP: <dpop>
+
+// server: the envelope, then the proof, then record proof.jti once
+const att = decodeAndVerifySessionAttestationV2(attestation, { expect: { accountAddress } })
+const proof = verifyPopProof(dpop, { token: attestation, htm: 'POST', htu: url })
+if (proof.jkt !== att.cnf.jkt) throw new Error('not signed by the session device key')
+```
+
+`deviceKey` is any `DeviceKeySigner`: the Cofferdam app's is a Secure Enclave or Keystore key; `SoftwareDeviceKeySigner` is for tests. The verifier must also refuse a `jti` it has seen before.
+
 ## Escrow
 
 ```ts
@@ -136,11 +156,12 @@ Profiles: `verified-br`, `verified-us`, `unverified`, `ofac-flagged`, `stale-pro
 |---|---|
 | Passkey account: address derivation, sponsored relayed operations, first-op deployment | ✅ Built, used by the Cofferdam app on Base Sepolia |
 | Passkey devices: list, add (up to 3), revoke, device-handoff QR codec | ✅ Built |
-| `csa1:` session attestation: create and verify | ✅ Built (version 1) |
+| `csa1:` session attestation: create and verify | ✅ Built (versions 1 and 2) |
 | Spot escrow and escrow factory clients | ✅ Built |
 | Mock and local-chain providers, React bindings | ✅ Built |
 | Accounts that start from a partner app's passkey; first Cofferdam passkey on such an account | 📋 Planned |
-| `csa1:` version 2 (audience, actions, expiry) | 📋 Planned |
+| `csa1:` version 2: device binding, expiry, audience, fast and slow tiers | ✅ Built |
+| `csa1:` version 2's `actions[]`, signed by a partner app's key | 📋 Planned |
 | Handle resolution (pay a user by handle, verified against an on-chain anchor) | 📋 Planned |
 | Account generations: enumerate a user's earlier account addresses and move their balances | 📋 Planned |
 | Account recovery client | 📋 Planned |
