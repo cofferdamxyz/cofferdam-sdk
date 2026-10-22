@@ -143,7 +143,7 @@ export function SignInWithCofferdamButton({
       <style nonce={nonce}>{CSS}</style>
       <button
         type="button"
-        onClick={handleClick}
+        onClick={() => void handleClick()}
         disabled={isPending || disabled}
         aria-busy={isPending ? 'true' : undefined}
         aria-label={isPending ? 'Opening Cofferdam' : undefined}

@@ -97,7 +97,7 @@ export interface RelayUserOperationOptions {
   userOp: PackedUserOperation
   /** EntryPoint the op was hashed against; the plane refuses any other. */
   entryPoint: string
-  fetchImpl?: typeof fetch
+  fetchImpl?: typeof fetch | undefined
 }
 
 /** POST the signed op to the plane; resolves with the `handleOps` tx hash. */

@@ -40,14 +40,14 @@ export interface SignInPolicy {
    * ⇒ the SDK prefers the QR handoff to the Cofferdam RN app (the canonical,
    * portable key).
    */
-  allowInBrowserPasskey?: boolean
+  allowInBrowserPasskey?: boolean | undefined
   /**
    * Mint a device-bound `csa1:` v2 token (workspace decision 0055) instead of a
    * v1 bearer token: the passkey signs an envelope naming `deviceKey`, and every
    * request then carries a proof that key signs (`createPopProof`). Passkey
    * genesis only; the session-signer lane keeps `csa-sess1.`.
    */
-  session?: SignInSessionRequest
+  session?: SignInSessionRequest | undefined
 }
 
 /** What a device-bound `csa1:` v2 session is minted for (workspace decision 0055). */
@@ -57,9 +57,9 @@ export interface SignInSessionRequest {
   /** The key every request of this session is signed with; fresh at each passkey assertion. */
   deviceKey: DeviceKeySigner
   /** Who may accept the token. Defaults to the plane (`cofferdam-plane`). */
-  audience?: string
+  audience?: string | undefined
   /** Lifetime in milliseconds, capped by the tier. Defaults to the tier's cap. */
-  ttlMs?: number
+  ttlMs?: number | undefined
 }
 
 export interface VerifiedClaims {

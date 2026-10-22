@@ -78,7 +78,6 @@ describe('LocalChainProvider (integration)', () => {
       if (FORCE) {
         throw new Error(`[LocalChainProvider integration] ${skipReason}`)
       }
-      // eslint-disable-next-line no-console
       console.warn(`[LocalChainProvider integration] skipping: ${skipReason}`)
       return
     }

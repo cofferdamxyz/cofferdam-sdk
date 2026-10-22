@@ -58,7 +58,7 @@ export class Cofferdam {
    * in later phases it opens the Cofferdam mobile app via deep-link and waits
    * for the return callback.
    */
-  async signIn(opts?: { policy?: SignInPolicy }): Promise<SignInResponse> {
+  async signIn(opts?: { policy?: SignInPolicy | undefined }): Promise<SignInResponse> {
     const policy: SignInPolicy = {
       ...this.defaultPolicy,
       ...(opts?.policy ?? {}),
@@ -85,8 +85,7 @@ export class Cofferdam {
       throw new Error('[cofferdam-sdk] upgradeToPasskey: call signIn() first.')
     }
     const provider = this.provider
-    const enrollFirstPasskey = provider.enrollFirstPasskey
-    if (!enrollFirstPasskey) {
+    if (!provider.enrollFirstPasskey) {
       throw new PasskeyUpgradeUnsupportedError(
         `[cofferdam-sdk] provider (mode='${provider.mode}') does not implement passkey enrolment.`,
       )
@@ -101,7 +100,7 @@ export class Cofferdam {
 
     // The provider (and ultimately the on-chain validator) enforce the ratchet;
     // enrollFirstPasskey throws if the AA is not in an upgradable state.
-    const result = await enrollFirstPasskey.call(provider, { lane })
+    const result = await provider.enrollFirstPasskey({ lane })
     this.currentSession = {
       ...session,
       accountAddress: result.accountAddress,

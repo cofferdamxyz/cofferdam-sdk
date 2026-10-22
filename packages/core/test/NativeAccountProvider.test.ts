@@ -91,7 +91,6 @@ describe('NativeAccountProvider (integration)', () => {
         ? `base-anvil not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
         : 'ERC-4337 stack missing from base-contracts/deployments/localhost.json — run `yarn deploy:local`'
       if (FORCE) throw new Error(`[NativeAccountProvider integration] ${skipReason}`)
-      // eslint-disable-next-line no-console
       console.warn(`[NativeAccountProvider integration] skipping: ${skipReason}`)
       return
     }

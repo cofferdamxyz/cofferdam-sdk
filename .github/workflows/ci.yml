@@ -31,6 +31,8 @@ jobs:
         run: yarn build
       - id: typecheck
         run: yarn typecheck
+      - id: lint
+        run: yarn lint
       - id: test
         run: yarn test
 
@@ -48,6 +50,7 @@ jobs:
             install=yarn install --frozen-lockfile
             build=yarn build
             typecheck=yarn typecheck
+            lint=yarn lint
             test=yarn test
         with:
           script: |

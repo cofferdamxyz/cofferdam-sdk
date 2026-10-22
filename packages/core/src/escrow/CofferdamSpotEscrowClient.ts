@@ -19,8 +19,6 @@ import {
   Contract as EthContract,
   Wallet as EthWallet,
   JsonRpcProvider as EthProvider,
-  type Interface,
-  type Log,
   keccak256,
   toUtf8Bytes,
 } from 'ethers'
@@ -154,7 +152,6 @@ export class CofferdamSpotEscrowClient {
   readonly provider: EthProvider
   private readonly contract: EthContract
   private readonly readonlyContract: EthContract
-  private readonly iface: Interface
 
   constructor(config: CofferdamSpotEscrowClientConfig) {
     this.address = config.address
@@ -168,7 +165,6 @@ export class CofferdamSpotEscrowClient {
     this.provider = config.provider ?? (signerProvider as EthProvider)
     this.contract = new EthContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], config.signer)
     this.readonlyContract = new EthContract(this.address, COFFERDAM_SPOT_ESCROW_ABI as unknown as string[], this.provider)
-    this.iface = this.contract.interface
   }
 
   // ──────────────────────────────────────────────────────────────────────

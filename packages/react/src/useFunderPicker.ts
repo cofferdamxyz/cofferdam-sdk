@@ -40,9 +40,9 @@ export interface FunderCandidate {
   /** Lowercased 0x-prefixed 40-hex EOA / smart-account address. */
   address: string
   /** Optional display name (e.g. "Maria — TideRunners Finance"). */
-  label?: string
+  label?: string | undefined
   /** Unix ms — set by `recordUsage`. Older entries fall off `maxRecent`. */
-  lastUsedAt?: number
+  lastUsedAt?: number | undefined
 }
 
 export interface UseFunderPickerOptions {

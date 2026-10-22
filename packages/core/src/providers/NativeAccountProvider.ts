@@ -60,7 +60,6 @@
 //   same private key is reused across multiple wallet instances.
 
 import {
-  AbiCoder,
   getBytes,
   keccak256,
   toUtf8Bytes,
@@ -69,6 +68,7 @@ import {
   JsonRpcProvider,
   Wallet as EthWallet,
   Interface,
+  type ContractTransactionResponse,
   type TransactionReceipt,
 } from 'ethers'
 
@@ -112,8 +112,6 @@ import type {
 } from '../types.js'
 
 export { SignInRejected } from './MockProvider.js'
-
-const abi = AbiCoder.defaultAbiCoder()
 
 /** The one `NullifierRegistry` read `signIn()` makes. */
 const NULLIFIER_REGISTRY_ABI = ['function isAccountBound(address account) view returns (bool)'] as const
@@ -340,7 +338,7 @@ export interface NativeAccountProviderConfig {
    * passkey is id 0 (the default). A backup device should set this, pass
    * `authorityId` per tx, or call `resolveOwnAuthorityId()` to discover it.
    */
-  authorityId?: number
+  authorityId?: number | undefined
 
   /**
    * Override the counterfactual account address. A backup device does NOT derive
@@ -370,7 +368,7 @@ interface ResolvedConfig {
   contracts: {
     factory: string
     passkeyModule: string
-    paymaster?: string
+    paymaster?: string | undefined
     entryPoint: string
     nullifierRegistry: string | null
   }
@@ -392,7 +390,7 @@ export interface NativeTxRequest {
   to: string
   data?: string
   value?: bigint
-  /** Override gas limit; otherwise estimated (with a default fallback). */
+  /** Override gas limit; otherwise the provider's `defaultGasLimit`. */
   gasLimit?: bigint
   /** Override paymaster sponsorship for this tx. Defaults to provider setting. */
   usePaymaster?: boolean
@@ -400,7 +398,7 @@ export interface NativeTxRequest {
    * Authority id whose passkey signs this tx. Defaults to the provider's
    * configured `authorityId` (0 for the bootstrap device).
    */
-  authorityId?: number
+  authorityId?: number | undefined
 }
 
 export class NativeAccountProvider implements CofferdamProvider {
@@ -647,7 +645,12 @@ export class NativeAccountProvider implements CofferdamProvider {
     const deployer = new EthWallet(this.config.deployerPrivateKey, new JsonRpcProvider(this.config.rpcUrl))
     const factory = new EthContract(this.config.contracts.factory, FACTORY_ABI as unknown as string[], deployer)
     const config = await this.bootstrapConfig()
-    const tx = await factory.getFunction('deployAccount')(this.genesisModule(), config, this.config.genesisPermission, this.salt())
+    const tx = (await factory.getFunction('deployAccount')(
+      this.genesisModule(),
+      config,
+      this.config.genesisPermission,
+      this.salt(),
+    )) as ContractTransactionResponse
     await tx.wait()
     return addr
   }
@@ -776,7 +779,7 @@ export class NativeAccountProvider implements CofferdamProvider {
       ENTRY_POINT_ABI as unknown as string[],
       bundler,
     )
-    const tx = await entryPointWithSigner.handleOps([finalUserOp], bundler.getAddress())
+    const tx = (await entryPointWithSigner.handleOps([finalUserOp], bundler.getAddress())) as ContractTransactionResponse
     return tx.wait() as Promise<TransactionReceipt>
   }
 
@@ -925,30 +928,6 @@ export class NativeAccountProvider implements CofferdamProvider {
   }
 
   // ── Internals ──────────────────────────────────────────────────────────────
-
-  /**
-   * Estimate gas for an ERC-4337 UserOp by eth_estimateGas on the execute call.
-   * This is a rough approximation — production should use a bundler's
-   * `eth_estimateUserOperationGas` RPC method.
-   */
-  private async estimateGas(accountAddress: string, req: NativeTxRequest): Promise<bigint> {
-    try {
-      const data = ACCOUNT_IFACE.encodeFunctionData('execute', [
-        req.to,
-        req.value ?? 0n,
-        req.data ?? '0x',
-      ])
-      const estimate = await this.chainProvider.estimateGas({
-        from: this.config.contracts.entryPoint,
-        to: accountAddress,
-        data,
-      })
-      // 30% headroom — ERC-4337 validation + paymaster overhead.
-      return (estimate * 13n) / 10n
-    } catch {
-      return this.config.defaultGasLimit
-    }
-  }
 
   private salt(): string {
     return keccak256(toUtf8Bytes(`cofferdam-native-account|${this.config.userId}`))
