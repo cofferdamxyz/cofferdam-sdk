@@ -30,6 +30,10 @@ Every SDK change updates in the same change: client ABI, methods, JSDoc, this re
 
 Cofferdam internals use `Cofferdam*` identifiers, not `OffshoreSync*`. Exceptions: `scope: 'offshoresync'`, references to OffshoreSync-the-product in docs, and the `react-client`/`react-server` consumer repos. Details in `../rules/cofferdam-sdk.md`.
 
+## Review
+
+`REVIEW.md` says what failure looks like here and how a reviewer reports it: any review (`/code-review`, a hosted reviewer) reads it with this file. Before the last push a delegated session reviews its own diff against it and answers every finding (workspace decision 0052, `docs/runbooks/code-review.md`).
+
 ## References
 
 - Workspace rules: `../AGENTS.md` (Cofferdam workspace) and the cross-entity index one level above
