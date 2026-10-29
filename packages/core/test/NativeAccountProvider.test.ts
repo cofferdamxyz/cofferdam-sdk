@@ -92,7 +92,7 @@ describe('NativeAccountProvider (integration)', () => {
       skip = true
       skipReason = !node
         ? `base-anvil not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
-        : 'ERC-4337 stack missing from base-contracts/deployments/localhost.json — run `yarn deploy:local`'
+        : 'ERC-4337 stack missing from base-contracts/deployments/localhost.json — run `yarn deploy:all:local`'
       if (FORCE) throw new Error(`[NativeAccountProvider integration] ${skipReason}`)
       console.warn(`[NativeAccountProvider integration] skipping: ${skipReason}`)
       return
