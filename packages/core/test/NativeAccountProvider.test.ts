@@ -3,7 +3,7 @@
 // These need:
 //   1. base-anvil running at http://127.0.0.1:8545 (chainId 31337)
 //   2. The ERC-4337 stack + authority modules deployed via
-//        cd ../base-contracts && yarn deploy:local
+//        cd ../base-contracts && yarn deploy:all:local
 //      which writes CofferdamAccountFactory4337 / CofferdamPaymaster /
 //      WebAuthnPasskeyAuthority to base-contracts/deployments/localhost.json
 //   3. base-anvil rich wallet #0 as the PoC deployer (funds deploys + paymaster)
