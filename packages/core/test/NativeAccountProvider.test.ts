@@ -3,10 +3,13 @@
 // These need:
 //   1. base-anvil running at http://127.0.0.1:8545 (chainId 31337)
 //   2. The ERC-4337 stack + authority modules deployed via
-//        cd ../base-contracts && yarn deploy:local
+//        cd ../base-contracts && yarn deploy:all:local
 //      which writes CofferdamAccountFactory4337 / CofferdamPaymaster /
 //      WebAuthnPasskeyAuthority to base-contracts/deployments/localhost.json
 //   3. base-anvil rich wallet #0 as the PoC deployer (funds deploys + paymaster)
+//   4. The paymaster sponsors only its relayer's handleOps (decision 0071), and
+//      these tests self-bundle from rich #2 (DEPLOYER_PK), so deploy with
+//        RELAYER_ADDRESS=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC yarn deploy:all:local
 //
 // If any are missing the describe block skips (so plain `vitest` stays green in
 // CI without a chain). Set COFFERDAM_LOCAL_INTEGRATION=1 to force-fail instead.
@@ -89,7 +92,7 @@ describe('NativeAccountProvider (integration)', () => {
       skip = true
       skipReason = !node
         ? `base-anvil not reachable at ${RPC_URL} on chain ${CHAIN_ID}`
-        : 'ERC-4337 stack missing from base-contracts/deployments/localhost.json — run `yarn deploy:local`'
+        : 'ERC-4337 stack missing from base-contracts/deployments/localhost.json — run `yarn deploy:all:local`'
       if (FORCE) throw new Error(`[NativeAccountProvider integration] ${skipReason}`)
       console.warn(`[NativeAccountProvider integration] skipping: ${skipReason}`)
       return
