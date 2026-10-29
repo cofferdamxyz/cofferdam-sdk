@@ -7,6 +7,9 @@
 //      which writes CofferdamAccountFactory4337 / CofferdamPaymaster /
 //      WebAuthnPasskeyAuthority to base-contracts/deployments/localhost.json
 //   3. base-anvil rich wallet #0 as the PoC deployer (funds deploys + paymaster)
+//   4. The paymaster sponsors only its relayer's handleOps (decision 0071), and
+//      these tests self-bundle from rich #2 (DEPLOYER_PK), so deploy with
+//        RELAYER_ADDRESS=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC yarn deploy:all:local
 //
 // If any are missing the describe block skips (so plain `vitest` stays green in
 // CI without a chain). Set COFFERDAM_LOCAL_INTEGRATION=1 to force-fail instead.
