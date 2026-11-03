@@ -26,7 +26,7 @@
   "dependencies": {
     "@capacitor/android": "^7.0.0",
     "@capacitor/core": "^7.0.0",
-    "@capacitor/ios": "^7.0.0",
+    "@capacitor/ios": "^7.6.9",
     "@cofferdam/sdk": "*",
     "@cofferdam/sdk-react": "*",
     "ethers": "^6.13.0",
