@@ -218,10 +218,10 @@
   dependencies:
     tslib "^2.1.0"
 
-"@capacitor/ios@^7.0.0":
-  version "7.6.5"
-  resolved "https://registry.yarnpkg.com/@capacitor/ios/-/ios-7.6.5.tgz#4049e78d67821d666441af696d41ff70175655f0"
-  integrity sha512-jJK3wW65GAsmzgaswoePWDQ7mADIwQNWqWGcOeZyrPP7+lzW5/8gGqu9ASFGbG+GplFfgwRWzd4oH/7xb+lYFw==
+"@capacitor/ios@^7.6.9":
+  version "7.6.9"
+  resolved "https://registry.yarnpkg.com/@capacitor/ios/-/ios-7.6.9.tgz#25671dc9f70ec8ffc52ac923af1c44bb3210de73"
+  integrity sha512-LANP81TfwuJk1zq9EuF+J5AJK71rKDgXB5XD+VFJQHC7BxSH4Dsma6DSMyrjFT03jtqc/0JTMEfSMBE7go3ZjA==
 
 "@emnapi/core@1.10.0":
   version "1.10.0"
