@@ -183,10 +183,10 @@
     hashery "^1.5.1"
     keyv "^5.6.0"
 
-"@capacitor/android@^7.0.0":
-  version "7.6.5"
-  resolved "https://registry.yarnpkg.com/@capacitor/android/-/android-7.6.5.tgz#6b43f00dcbdccad9602d4ba84ffd4eacd8611bc9"
-  integrity sha512-FCNSo5bWkqCIuNt2OgG6IUsJJaYlghzbzlFf4IiHkFtir18FCyqHVGHszvtXB+npT7HQ9JQOZ4MQRDsgczKEGQ==
+"@capacitor/android@^7.6.9":
+  version "7.6.9"
+  resolved "https://registry.yarnpkg.com/@capacitor/android/-/android-7.6.9.tgz#eb15132eb054286916ac069c6a83b26d23393cf9"
+  integrity sha512-jvfU42aOuj92/KJqRscfDm+5612WzJainFL09xjJgD9oI3OMXN4PBfccn8Ig9i8x7bkVqZv/XNwFshiIRqmggg==
 
 "@capacitor/cli@^7.0.0":
   version "7.6.5"
