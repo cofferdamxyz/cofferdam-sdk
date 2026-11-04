@@ -7,7 +7,8 @@
 //   - CofferdamAccountFactory4337 — CREATE2 factory for CofferdamAccount4337.
 //   - CofferdamAccount4337        — the ERC-4337 `IAccount` wallet, governed by a
 //                                   High-tier P-256 passkey authority.
-//   - CofferdamPaymaster          — dev/test gas sponsor (production: CDP Paymaster).
+//   - CofferdamPaymaster          — testnet gas sponsor for the plane's relayer
+//                                   only (production: CDP Paymaster).
 //   - PasskeyAuthority            — stateless High-tier P-256 module that verifies
 //                                   raw 64-byte `r || s` signatures. Used with
 //                                   `DeterministicPasskeySigner` (not WebAuthn).
@@ -42,8 +43,12 @@
 // Gas sponsorship:
 //   - Production: CDP Paymaster (ERC-7677 hosted service, not deployable locally).
 //     The `paymasterAndData` field is populated server-side via `pm_getPaymasterData`.
-//   - Local dev (simple calls): `CofferdamPaymaster` stub — `paymasterAndData` is
-//     `solidityPacked(address, uint128 verificationGasLimit, uint128 postOpGasLimit)`.
+//   - Testnet and local dev (simple calls): `CofferdamPaymaster` — `paymasterAndData`
+//     is `solidityPacked(address, uint128 verificationGasLimit, uint128 postOpGasLimit)`.
+//     It sponsors only `handleOps` sent by its relayer (`tx.origin`), for accounts
+//     running the factory's code (workspace decision 0071): on Sepolia that is the
+//     plane's relayer behind `relayerUrl`; locally, deploy it with RELAYER_ADDRESS
+//     set to the key that self-bundles (`deployerPrivateKey`).
 //   - Local dev (authority management): pre-fund the account with ETH and set
 //     `usePaymaster: false`. The account pays gas via its own EntryPoint deposit.
 //
