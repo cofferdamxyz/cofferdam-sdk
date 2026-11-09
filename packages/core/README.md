@@ -17,7 +17,7 @@ Not on npm yet. Install the release branch CI builds from `main`:
 
 | Import | Contents |
 |---|---|
-| `@cofferdam/sdk` | Everything, including `Cofferdam`, signers, session attestation, device handoff, relay helpers, escrow clients |
+| `@cofferdam/sdk` | Everything, including `Cofferdam`, signers, session attestation, device handoff, the root keys of the recovery phrase (`deriveRootKeys`), relay helpers, escrow clients |
 | `@cofferdam/sdk/native` | `NativeAccountProvider` |
 | `@cofferdam/sdk/mock` | `MockProvider`, `mockProfiles` (no `ethers`) |
 | `@cofferdam/sdk/local` | `LocalChainProvider` |

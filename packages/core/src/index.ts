@@ -141,6 +141,22 @@ export {
 } from './identity/popProof.js'
 export { derivePseudonym, deriveScopeKey } from './identity/pseudonym.js'
 export {
+  phraseSeed,
+  isValidPhrase,
+  deriveRootKeys,
+  deriveVaultRootKey,
+  deriveMessagingRootKey,
+  deriveRecoveryKeyMaterial,
+  derivePrfEnvelopeKey,
+  selfSecretFromPhrase,
+  ROOT_KEYS_VERSION,
+  ROOT_KEYS_SALT,
+  ROOT_KEY_LABELS,
+  ROOT_PHRASE_WORDS,
+  COFFERDAM_PRF_SALT,
+  type CofferdamRootKeys,
+} from './identity/rootKeys.js'
+export {
   tierOf,
   isUntrustedLowTier,
   chooseEnrollmentLane,

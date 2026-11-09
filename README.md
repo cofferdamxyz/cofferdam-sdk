@@ -11,7 +11,7 @@ The SDK is pre-release (v0.0.0). The API changes without notice until the first 
 
 | Package | Import | Contents |
 |---|---|---|
-| `@cofferdam/sdk` | `@cofferdam/sdk` | Everything: the `Cofferdam` class, providers, passkey and WebAuthn signers, session attestation, device handoff, relay helpers, escrow clients |
+| `@cofferdam/sdk` | `@cofferdam/sdk` | Everything: the `Cofferdam` class, providers, passkey and WebAuthn signers, session attestation, device handoff, the root keys of the recovery phrase, relay helpers, escrow clients |
 | | `@cofferdam/sdk/native` | `NativeAccountProvider`: the ERC-4337 account client |
 | | `@cofferdam/sdk/mock` | `MockProvider` and named test profiles (no chain, no `ethers`) |
 | | `@cofferdam/sdk/local` | `LocalChainProvider`: plain EOAs on a local or test chain |
@@ -110,6 +110,23 @@ if (proof.jkt !== att.cnf.jkt) throw new Error('not signed by the session device
 
 `deviceKey` is any `DeviceKeySigner`: the Cofferdam app's is a Secure Enclave or Keystore key; `SoftwareDeviceKeySigner` is for tests. The verifier must also refuse a `jti` it has seen before.
 
+## Root keys from the recovery phrase
+
+An account's long-lived secrets that are not wallet keys all derive from its 24-word BIP-39 phrase, each under its own HKDF-SHA256 label, never on a wallet path and never from an account address (Cofferdam decision 0081). The functions are synchronous and pure, `Uint8Array` in and out:
+
+```ts
+import { deriveRootKeys, phraseSeed, deriveVaultRootKey, derivePrfEnvelopeKey, selfSecretFromPhrase, COFFERDAM_PRF_SALT } from '@cofferdam/sdk'
+
+const { vault, messaging, recovery } = deriveRootKeys(phrase) // 32 bytes each; throws unless 24 valid words
+const seed = phraseSeed(phrase)                               // the BIP-39 seed, 64 bytes, for one key at a time
+const vaultKey = deriveVaultRootKey(seed)
+seed.fill(0)
+const envelopeKey = derivePrfEnvelopeKey(prfFirst)            // from a passkey's PRF output evaluated with COFFERDAM_PRF_SALT
+const selfSecret = selfSecretFromPhrase(phrase)               // the passport secret, on ethers' default path as it always was
+```
+
+The salt, the labels and `COFFERDAM_PRF_SALT` are frozen once a Vault exists. The recovery material takes a rotation index (`deriveRecoveryKeyMaterial(seed, index)`); its curve and commitment belong to the recovery design.
+
 ## Escrow
 
 ```ts
@@ -157,6 +174,7 @@ Profiles: `verified-br`, `verified-us`, `unverified`, `ofac-flagged`, `stale-pro
 | Passkey account: address derivation, sponsored relayed operations, first-op deployment | ✅ Built, used by the Cofferdam app on Base Sepolia |
 | Passkey devices: list, add (up to 3), revoke, device-handoff QR codec | ✅ Built |
 | `csa1:` session attestation: create and verify | ✅ Built (versions 1 and 2) |
+| Root keys from the 24-word recovery phrase: the Vault, messaging and recovery keys, the PRF envelope key, the passport secret on its existing path | ✅ Built |
 | Spot escrow and escrow factory clients | ✅ Built |
 | Mock and local-chain providers, React bindings | ✅ Built |
 | Accounts that start from a partner app's passkey; first Cofferdam passkey on such an account | 📋 Planned |
