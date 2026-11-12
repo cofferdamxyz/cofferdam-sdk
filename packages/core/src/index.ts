@@ -81,6 +81,7 @@ export {
   DEFAULT_HANDOFF_MAX_AGE_MS,
   type DeviceHandoff,
   type DeviceHandoffFields,
+  type DeviceHandoffVersion,
 } from './identity/deviceHandoff.js'
 export {
   mockProfiles,

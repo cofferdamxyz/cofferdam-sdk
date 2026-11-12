@@ -67,7 +67,7 @@ await provider.ensureDeployed()                    // first sponsored op carries
 await provider.sendTransaction({ to, data })       // execute(to, value, data), signed and relayed
 ```
 
-Device management on the same provider: `listAuthorities()` (each record carries its tier, including `partner`, and a High's `probationEndsAt` in unix seconds, or `null`), `addBackupPasskey(publicKey)` (up to 3 passkeys), `revokeAuthority(id)` (the last passkey cannot be revoked), `resolveOwnAuthorityId()`. `createDeviceHandoff` and `decodeAndVerifyDeviceHandoff` encode and check the `cdh1:` QR a new device shows to an existing one.
+Device management on the same provider: `listAuthorities()` (each record carries its tier, including `partner`, and a High's `probationEndsAt` in unix seconds, or `null`), `addBackupPasskey(publicKey)` (up to 3 passkeys), `revokeAuthority(id)` (the last passkey cannot be revoked), `resolveOwnAuthorityId()`. `createDeviceHandoff` and `decodeAndVerifyDeviceHandoff` encode and check the `cdh1:` QR a new device shows to an existing one. Passing `handoverKey` (the new device's X25519 public key, 0x-hex, which needs the invitation `challenge`) makes a version 2 handoff: its digest has its own domain and commits to both, so the existing device can seal the account's root keys to that key once the passkey is added (workspace decision 0081). Version 1 tokens still decode and verify; an SDK older than version 2 refuses a version 2 token.
 
 Contract addresses are configuration; the SDK holds no address table. The Base Sepolia deployment is in [`cofferdamxyz/base-contracts`](https://github.com/cofferdamxyz/base-contracts) under `deployments/baseSepolia.json`.
 
@@ -172,7 +172,7 @@ Profiles: `verified-br`, `verified-us`, `unverified`, `ofac-flagged`, `stale-pro
 | Area | Status |
 |---|---|
 | Passkey account: address derivation, sponsored relayed operations, first-op deployment | ✅ Built, used by the Cofferdam app on Base Sepolia |
-| Passkey devices: list, add (up to 3), revoke, device-handoff QR codec | ✅ Built |
+| Passkey devices: list, add (up to 3), revoke, device-handoff QR codec (versions 1 and 2, the second with the handover key) | ✅ Built |
 | `csa1:` session attestation: create and verify | ✅ Built (versions 1 and 2) |
 | Root keys from the 24-word recovery phrase: the Vault, messaging and recovery keys, the PRF envelope key, the passport secret on its existing path | ✅ Built |
 | Spot escrow and escrow factory clients | ✅ Built |

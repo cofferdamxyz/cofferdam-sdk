@@ -1,6 +1,6 @@
 # @cofferdam/sdk
 
-Framework-agnostic TypeScript core of the Cofferdam SDK for Base: passkey-governed ERC-4337 accounts with sponsored gas, `csa1:` session attestations a server can verify, the device-handoff QR codec, and clients for the Cofferdam spot escrow and escrow factory.
+Framework-agnostic TypeScript core of the Cofferdam SDK for Base: passkey-governed ERC-4337 accounts with sponsored gas, `csa1:` session attestations a server can verify, the device-handoff QR codec (with the new device's handover key in version 2), and clients for the Cofferdam spot escrow and escrow factory.
 
 Pre-release (v0.0.0); the API changes without notice until the first published version.
 
@@ -17,7 +17,7 @@ Not on npm yet. Install the release branch CI builds from `main`:
 
 | Import | Contents |
 |---|---|
-| `@cofferdam/sdk` | Everything, including `Cofferdam`, signers, session attestation, device handoff, the root keys of the recovery phrase (`deriveRootKeys`), relay helpers, escrow clients |
+| `@cofferdam/sdk` | Everything, including `Cofferdam`, signers, session attestation, device handoff (versions 1 and 2), the root keys of the recovery phrase (`deriveRootKeys`), relay helpers, escrow clients |
 | `@cofferdam/sdk/native` | `NativeAccountProvider` |
 | `@cofferdam/sdk/mock` | `MockProvider`, `mockProfiles` (no `ethers`) |
 | `@cofferdam/sdk/local` | `LocalChainProvider` |
