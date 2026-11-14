@@ -738,10 +738,11 @@ export class NativeAccountProvider implements CofferdamProvider {
     // ── Pack gas fields for ERC-4337 v0.7 ─────────────────────────────────
     const feeData = await this.chainProvider.getFeeData()
     const pvgSetting = this.config.preVerificationGas
-    // The unsponsored mainnet lane ('l1-fee') refuses a maxFeePerGas under
-    // 1.25 × the base fee (`fee_too_low`), which `eth_gasPrice` (base fee + a
-    // small tip) can fall below: there the price is ethers' maxFeePerGas
-    // (2 × base fee + tip) when that is higher.
+    // The unsponsored mainnet lane ('l1-fee') refuses a maxFeePerGas under the
+    // latest base fee (`fee_too_low`). `eth_gasPrice` (base fee + a small tip)
+    // sits just above it and falls under it if the base fee rises before the
+    // plane checks, so there the price is ethers' maxFeePerGas (2 × base fee +
+    // tip) when that is higher.
     const quoted = feeData.gasPrice ?? 1_000_000_000n
     const gasPrice =
       pvgSetting === 'l1-fee' && feeData.maxFeePerGas !== null && feeData.maxFeePerGas > quoted ? feeData.maxFeePerGas : quoted
