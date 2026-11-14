@@ -79,4 +79,42 @@ describe('relayUserOperation', () => {
     ).rejects.toMatchObject({ name: 'UserOpRelayError', code: 'paymaster_not_ours', status: 400 })
     expect(new UserOpRelayError('x', 'y', 500).message).toContain('x')
   })
+
+  it("returns the plane's receipt state, and null from a plane that sends none", async () => {
+    const answer = (body: object) => async () => new Response(JSON.stringify(body), { status: 202 })
+    const call = (body: object) =>
+      relayUserOperation({ relayerUrl: 'https://plane.test', userOp: op, entryPoint: '0x0', fetchImpl: answer(body) })
+    expect(await call({ ok: true, txHash: '0x01', receipt: 'pending' })).toEqual({ txHash: '0x01', receipt: 'pending' })
+    expect(await call({ ok: true, txHash: '0x01', receipt: 'unknown' })).toEqual({ txHash: '0x01', receipt: 'unknown' })
+    expect(await call({ ok: true, txHash: '0x01' })).toEqual({ txHash: '0x01', receipt: null })
+    expect(await call({ ok: true, txHash: '0x01', receipt: 'weird' })).toEqual({ txHash: '0x01', receipt: null })
+  })
+
+  it('carries the error name of a pre-flight revert and the tx hash of a mined revert', async () => {
+    const answer = (status: number, body: object) => async () => new Response(JSON.stringify(body), { status })
+    await expect(
+      relayUserOperation({
+        relayerUrl: 'https://plane.test',
+        userOp: op,
+        entryPoint: '0x0',
+        fetchImpl: answer(400, { ok: false, error: 'execution_reverted', message: 'WrongBoundDigest' }),
+      }),
+    ).rejects.toMatchObject({ code: 'execution_reverted', status: 400, txHash: null, message: expect.stringContaining('WrongBoundDigest') })
+    await expect(
+      relayUserOperation({
+        relayerUrl: 'https://plane.test',
+        userOp: op,
+        entryPoint: '0x0',
+        fetchImpl: answer(422, { ok: false, error: 'user_op_reverted', message: 'IdentifierAlreadyBound', txHash: '0xbeef' }),
+      }),
+    ).rejects.toMatchObject({ code: 'user_op_reverted', status: 422, txHash: '0xbeef' })
+    await expect(
+      relayUserOperation({
+        relayerUrl: 'https://plane.test',
+        userOp: op,
+        entryPoint: '0x0',
+        fetchImpl: answer(503, { ok: false, error: 'preflight_unavailable', message: 'eth_simulateV1 unsupported' }),
+      }),
+    ).rejects.toMatchObject({ code: 'preflight_unavailable', status: 503 })
+  })
 })

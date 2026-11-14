@@ -32,7 +32,10 @@
 //      issue them yet).
 //
 // `sendTransaction()` builds an ERC-4337 PackedUserOperation, signs the
-// userOpHash with the passkey, and submits via `EntryPoint.handleOps()`.
+// userOpHash with the passkey, and submits via `EntryPoint.handleOps()`. It
+// resolves only when the op's own `UserOperationEvent.success` is true
+// (decision 0080 (3)): a mined `handleOps` whose op reverted throws
+// `UserOperationFailedError`, and so does a receipt that cannot be read.
 //
 // Signature format: `solidityPacked(uint256 authorityId, bytes innerSignature)`
 // where `innerSignature` is the raw 64-byte P-256 `r || s` from the passkey
@@ -95,6 +98,8 @@ import { jwkThumbprint } from '../identity/deviceKey.js'
 import { SignInRejected } from './MockProvider.js'
 import { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './permission.js'
 import { buildInitCode, relayUserOperation, type PackedUserOperation } from './userOpRelay.js'
+import { confirmUserOperation } from './userOpOutcome.js'
+import { estimateL1PreVerificationGas, standInSignature } from './preVerificationGas.js'
 import type {
   AuthorityDescriptor,
   AuthorityKind,
@@ -357,6 +362,18 @@ export interface NativeAccountProviderConfig {
   /** Gas limit for AA txs when estimation is skipped/fails. Default 20_000_000. */
   defaultGasLimit?: bigint
 
+  /**
+   * The op's `preVerificationGas`. Default `0n`, which the sponsored Base
+   * Sepolia relay accepts. `'l1-fee'` estimates it from Base's GasPriceOracle so
+   * the op repays the bundle's L1 data fee, as the plane's unsponsored mainnet
+   * test relay requires (`preVerificationGas.ts`); it needs an OP Stack chain
+   * (Base, Base Sepolia or a fork). A bigint is sent as is.
+   */
+  preVerificationGas?: bigint | 'l1-fee' | undefined
+
+  /** How long to wait for a relayed op's receipt before `UserOperationFailedError('unknown')`. Default 120 s. */
+  receiptTimeoutMs?: number | undefined
+
   latencyMs?: number
 }
 
@@ -380,6 +397,8 @@ interface ResolvedConfig {
   authorityId: number
   autoDeploy: boolean
   defaultGasLimit: bigint
+  preVerificationGas: bigint | 'l1-fee'
+  receiptTimeoutMs: number | undefined
   latencyMs: number
   genesis: GenesisAuthorityConfig
   genesisPermission: Permission
@@ -439,6 +458,8 @@ export class NativeAccountProvider implements CofferdamProvider {
       authorityId: config.authorityId ?? 0,
       autoDeploy: config.autoDeploy ?? false,
       defaultGasLimit: config.defaultGasLimit ?? 20_000_000n,
+      preVerificationGas: config.preVerificationGas ?? 0n,
+      receiptTimeoutMs: config.receiptTimeoutMs,
       latencyMs: config.latencyMs ?? 0,
       genesis,
       genesisPermission: config.genesisPermission ?? NO_PERMISSION,
@@ -664,6 +685,12 @@ export class NativeAccountProvider implements CofferdamProvider {
    * calls after `validateUserOp` succeeds. A not-yet-deployed account is
    * created by this op: with `relayerUrl` the op carries `initCode`; with the
    * PoC deployer key the factory is called first.
+   *
+   * Resolves with the receipt of the transaction that ran the op, only once the
+   * op's `UserOperationEvent.success` is true. Throws `UserOpRelayError` when
+   * the plane refuses (`execution_reverted`: nothing sent; `user_op_reverted`:
+   * mined and reverted) and `UserOperationFailedError` when the op reverted,
+   * did not run, or its receipt cannot be read in time (`unknown`).
    */
   async sendTransaction(req: NativeTxRequest): Promise<TransactionReceipt> {
     const accountAddress = await this.getAccountAddress()
@@ -716,6 +743,9 @@ export class NativeAccountProvider implements CofferdamProvider {
     const accountGasLimits = packGasLimits(verificationGasLimit, callGasLimit)
     const gasFees = packGasFees(gasPrice, gasPrice) // priority = base for simplicity
 
+    const authorityId = req.authorityId ?? this.config.authorityId
+    const pvgSetting = this.config.preVerificationGas
+
     // ── Build the PackedUserOperation ─────────────────────────────────────
     const userOp: PackedUserOperation = {
       sender: accountAddress,
@@ -723,7 +753,7 @@ export class NativeAccountProvider implements CofferdamProvider {
       initCode,
       callData: executeData,
       accountGasLimits,
-      preVerificationGas: 0n,
+      preVerificationGas: pvgSetting === 'l1-fee' ? 0n : pvgSetting,
       gasFees,
       paymasterAndData:
         usePaymaster && paymaster
@@ -735,11 +765,22 @@ export class NativeAccountProvider implements CofferdamProvider {
       signature: '0x', // placeholder — set after hashing
     }
 
+    // ── preVerificationGas for the L1 data fee, before the hash is signed ──
+    if (pvgSetting === 'l1-fee') {
+      userOp.preVerificationGas = await estimateL1PreVerificationGas({
+        runner: this.chainProvider,
+        chainId: this.config.chainId,
+        entryPoint: this.config.contracts.entryPoint,
+        // A large stand-in value, so its word in the calldata is as non-zero as the real one.
+        userOp: { ...userOp, preVerificationGas: (1n << 32n) - 1n, signature: standInSignature(authorityId) },
+        maxFeePerGas: gasPrice,
+      })
+    }
+
     // ── Get the userOpHash from the EntryPoint ────────────────────────────
     const userOpHash = await (entryPoint.getUserOpHash(userOp) as Promise<string>)
 
     // ── Sign the hash with the genesis authority (prefixed with authorityId) ──
-    const authorityId = req.authorityId ?? this.config.authorityId
     const innerSignature = await this.signInner(accountAddress, userOpHash)
     const signature = solidityPacked(['uint256', 'bytes'], [authorityId, innerSignature])
 
@@ -747,7 +788,8 @@ export class NativeAccountProvider implements CofferdamProvider {
     const finalUserOp: PackedUserOperation = { ...userOp, signature }
 
     // Production: the plane's relayer bundles the op (and is refunded by the
-    // paymaster); the client only waits for the receipt.
+    // paymaster). Its 202 says only that the op was sent: whatever its
+    // `receipt` field says, the op's own event decides (decision 0080 (3)).
     if (this.config.relayerUrl) {
       const { txHash } = await relayUserOperation({
         relayerUrl: this.config.relayerUrl,
@@ -755,9 +797,13 @@ export class NativeAccountProvider implements CofferdamProvider {
         entryPoint: this.config.contracts.entryPoint,
         fetchImpl: this.config.fetchImpl,
       })
-      const receipt = await this.chainProvider.waitForTransaction(txHash)
-      if (!receipt) throw new Error(`[cofferdam-sdk] sendTransaction: relayed tx ${txHash} was not mined`)
-      return receipt
+      return confirmUserOperation({
+        provider: this.chainProvider,
+        entryPoint: this.config.contracts.entryPoint,
+        userOpHash,
+        txHash,
+        timeoutMs: this.config.receiptTimeoutMs,
+      })
     }
 
     // PoC: the deployer key doubles as the bundler and submits handleOps itself.
@@ -780,7 +826,13 @@ export class NativeAccountProvider implements CofferdamProvider {
       bundler,
     )
     const tx = (await entryPointWithSigner.handleOps([finalUserOp], bundler.getAddress())) as ContractTransactionResponse
-    return tx.wait() as Promise<TransactionReceipt>
+    return confirmUserOperation({
+      provider: bundlerProvider,
+      entryPoint: this.config.contracts.entryPoint,
+      userOpHash,
+      txHash: tx.hash,
+      timeoutMs: this.config.receiptTimeoutMs,
+    })
   }
 
   // ── Authority management (multi-device) ─────────────────────────────────────

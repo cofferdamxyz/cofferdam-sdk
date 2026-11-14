@@ -31,7 +31,47 @@ export {
   type PackedUserOperation,
   type PackedUserOperationJson,
   type RelayUserOperationOptions,
+  type RelayUserOperationResult,
+  type RelayReceiptState,
 } from './providers/userOpRelay.js'
+export {
+  ENTRY_POINT_EVENTS_ABI,
+  USER_OPERATION_LOOKBACK_BLOCKS,
+  USER_OPERATION_RECEIPT_TIMEOUT_MS,
+  UserOperationFailedError,
+  confirmUserOperation,
+  userOperationOutcome,
+  type ConfirmUserOperationOptions,
+  type UserOperationOutcome,
+} from './providers/userOpOutcome.js'
+export {
+  GAS_PRICE_ORACLE,
+  L1_FEE_MARGIN_BPS,
+  STAND_IN_INNER_SIGNATURE_BYTES,
+  calldataGas,
+  estimateL1PreVerificationGas,
+  preVerificationGasForL1Fee,
+  standInSignature,
+  type EstimateL1PreVerificationGasOptions,
+} from './providers/preVerificationGas.js'
+export {
+  COFFERDAM_IDENTITY_REGISTRY_ABI,
+  CofferdamIdentityRegistryClient,
+  IDENTITY_ACTIONS,
+  IDENTITY_ACTION_TAGS,
+  IdentityRegistryError,
+  encodeBindCall,
+  encodeZkpEvidence,
+  identityDigest,
+  identityRevertName,
+  zkpCustomData,
+  zkpEvidenceFromParams,
+  type CofferdamIdentityRegistryClientConfig,
+  type IdentityAction,
+  type IdentityCheckResult,
+  type ZkpEvidence,
+  type ZkpSolidityParams,
+} from './identity/identityRegistry.js'
 export { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './providers/permission.js'
 export {
   encodeSessionConfig,

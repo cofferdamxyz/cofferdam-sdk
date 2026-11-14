@@ -79,16 +79,43 @@ export function buildInitCode(
   ])
 }
 
-/** The plane refused or failed to relay the op. `code` is its error id. */
+/**
+ * The plane refused or failed to relay the op. `code` is its error id; the
+ * ones a caller acts on (cofferdam-api `routes/aa.ts`):
+ *   - `execution_reverted` (400): the pre-flight found that the op's own call
+ *     would revert; nothing was sent. `message` is the revert's error name
+ *     (`WrongBoundDigest`, `IdentifierAlreadyBound`, ...), never its arguments.
+ *   - `user_op_reverted` (422): mined, and the op's call reverted; `txHash` is set.
+ *   - `simulation_failed` (400): validation failed (`AAxx`); nothing was sent.
+ *   - `preflight_unavailable` (503): the plane's node cannot pre-flight; nothing
+ *     was sent.
+ *   - `rate_limited` (429), `relay_failed` (502): retry later.
+ */
 export class UserOpRelayError extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly status: number,
+    /** The mined transaction, for `user_op_reverted`. */
+    readonly txHash: string | null = null,
   ) {
     super(`[cofferdam-sdk] relay ${code}: ${message}`)
     this.name = 'UserOpRelayError'
   }
+}
+
+/**
+ * What the plane saw of the op's receipt within its wait: `success` (the op's
+ * own event said so), `pending` (no receipt in time) or `unknown` (`handleOps`
+ * reverted in this transaction; a resend may have carried the op earlier).
+ * Absent from planes before decision 0080's relay. The client checks the op's
+ * own event whatever this says (`confirmUserOperation`).
+ */
+export type RelayReceiptState = 'success' | 'pending' | 'unknown'
+
+export interface RelayUserOperationResult {
+  txHash: string
+  receipt: RelayReceiptState | null
 }
 
 export interface RelayUserOperationOptions {
@@ -100,8 +127,12 @@ export interface RelayUserOperationOptions {
   fetchImpl?: typeof fetch | undefined
 }
 
-/** POST the signed op to the plane; resolves with the `handleOps` tx hash. */
-export async function relayUserOperation(opts: RelayUserOperationOptions): Promise<{ txHash: string }> {
+/**
+ * POST the signed op to the plane; resolves with the `handleOps` tx hash once
+ * the plane accepted it (`202`). Acceptance is not success: confirm the op
+ * with `confirmUserOperation`, as `NativeAccountProvider.sendTransaction` does.
+ */
+export async function relayUserOperation(opts: RelayUserOperationOptions): Promise<RelayUserOperationResult> {
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = opts.relayerUrl.replace(/\/+$/, '') + USER_OPERATION_PATH
   const res = await fetchImpl(url, {
@@ -114,9 +145,16 @@ export async function relayUserOperation(opts: RelayUserOperationOptions): Promi
     txHash?: string
     error?: string
     message?: string
+    receipt?: string
   }
   if (!res.ok || !body.ok || !body.txHash) {
-    throw new UserOpRelayError(body.error ?? `http_${res.status}`, body.message ?? `relayer answered ${res.status}`, res.status)
+    throw new UserOpRelayError(
+      body.error ?? `http_${res.status}`,
+      body.message ?? `relayer answered ${res.status}`,
+      res.status,
+      typeof body.txHash === 'string' ? body.txHash : null,
+    )
   }
-  return { txHash: body.txHash }
+  const receipt = body.receipt === 'success' || body.receipt === 'pending' || body.receipt === 'unknown' ? body.receipt : null
+  return { txHash: body.txHash, receipt }
 }
