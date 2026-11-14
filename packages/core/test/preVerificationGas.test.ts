@@ -38,7 +38,7 @@ describe('preVerificationGas for the L1 fee', () => {
     expect(preVerificationGasForL1Fee(10n ** 12n, 10n ** 7n, 0n)).toBe(137_500n)
     expect(preVerificationGasForL1Fee(1n, 3n, 100n, 10_000n)).toBe(101n)
     const pvg = preVerificationGasForL1Fee(123_456_789n, 7n, 50_000n)
-    // The plane's floor: pvg × maxFee ≥ 1.25 × L1 fee.
+    // The L1 part repays at least 1.25 × the L1 fee at the op's price.
     expect((pvg - 50_000n) * 7n * 100n >= 123_456_789n * 125n).toBe(true)
     expect(() => preVerificationGasForL1Fee(1n, 0n, 0n)).toThrow()
   })
@@ -65,5 +65,48 @@ describe('preVerificationGas for the L1 fee', () => {
     expect(sent.chainId).toBe(8453n)
     expect(sent.signature).toBeNull()
     expect(pvg).toBe(137_500n + calldataGas(sent.data))
+  })
+
+  // cofferdam-api `services/testRelay.ts` (branch claude/zkp-plane-53039e at
+  // 8c67738), `requiredPreVerificationGas`: ceil(getL1Fee × 125%) / price,
+  // ceiled, plus the handleOps calldata gas plus 21,000 (the SDK's
+  // calldataGas already includes the 21,000).
+  function planeRequired(l1Fee: bigint, price: bigint, handleOpsData: string): bigint {
+    const l1 = (l1Fee * 125n + 99n) / 100n
+    return (l1 + price - 1n) / price + calldataGas(handleOpsData)
+  }
+
+  it("clears the plane's floor for the op as really signed, with an oracle priced by size", async () => {
+    const HANDLE_OPS = new Interface([
+      'function handleOps((address sender, uint256 nonce, bytes initCode, bytes callData, bytes32 accountGasLimits, uint256 preVerificationGas, bytes32 gasFees, bytes paymasterAndData, bytes signature)[] ops, address payable beneficiary)',
+    ])
+    // A bind-sized op: 12 KB of call data, mostly incompressible.
+    const bindOp = { ...op, callData: standInSignature(9, 12_000) }
+    const perByte = 100_000n // wei per byte of the unsigned transaction
+    const runner = {
+      async call(tx: { to: string; data: string }) {
+        const unsigned = ORACLE.decodeFunctionData('getL1Fee', tx.data)[0] as string
+        return AbiCoder.defaultAbiCoder().encode(['uint256'], [BigInt(getBytes(unsigned).length) * perByte])
+      },
+    }
+    const price = 10_000_000n
+    const pvg = await estimateL1PreVerificationGas({
+      runner,
+      chainId: 8453,
+      entryPoint: EP,
+      userOp: { ...bindOp, preVerificationGas: (1n << 32n) - 1n, signature: standInSignature(0) },
+      maxFeePerGas: price,
+    })
+    // The real op: the estimate signed in, a 480-byte WebAuthn inner signature, the relayer as beneficiary.
+    const real = { ...bindOp, preVerificationGas: pvg, signature: standInSignature(0, 480) }
+    const data = HANDLE_OPS.encodeFunctionData('handleOps', [
+      [[real.sender, real.nonce, real.initCode, real.callData, real.accountGasLimits, real.preVerificationGas, real.gasFees, real.paymasterAndData, real.signature]],
+      '0x' + '7e'.repeat(20),
+    ])
+    const relayerTx = Transaction.from({ type: 2, chainId: 8453n, nonce: 0, to: EP, data, gasLimit: 5_000_000n, maxFeePerGas: price, maxPriorityFeePerGas: price })
+    const l1Fee = BigInt(getBytes(relayerTx.unsignedSerialized).length) * perByte
+    expect(pvg).toBeGreaterThanOrEqual(planeRequired(l1Fee, price, data))
+    // ...and with the L1 fee 10% higher by the time the plane checks.
+    expect(pvg).toBeGreaterThanOrEqual(planeRequired((l1Fee * 110n) / 100n, price, data))
   })
 })

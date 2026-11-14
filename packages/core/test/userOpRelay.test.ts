@@ -69,6 +69,17 @@ describe('relayUserOperation', () => {
     expect(res.txHash).toBe('0xdead')
     expect(calls[0].url).toBe('https://plane.test' + USER_OPERATION_PATH)
     expect((calls[0].body as { userOp: { nonce: string } }).userOp.nonce).toBe('0')
+    expect(calls[0].body).not.toHaveProperty('chainId')
+  })
+
+  it('names the chain when given, so the plane picks the lane', async () => {
+    let body: Record<string, unknown> = {}
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return new Response(JSON.stringify({ ok: true, txHash: '0x01' }), { status: 202 })
+    }
+    await relayUserOperation({ relayerUrl: 'https://plane.test', userOp: op, entryPoint: '0x0', chainId: 8453, fetchImpl })
+    expect(body.chainId).toBe(8453)
   })
 
   it("throws the plane's error id when the relay refuses", async () => {

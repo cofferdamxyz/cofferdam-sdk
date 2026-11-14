@@ -249,7 +249,9 @@ export class CofferdamIdentityRegistryClient {
    * Pre-flight by `eth_call`: every check `bind`, `relink` or `requestRebind`
    * would run for `account` (the account that will send it). Throws
    * `IdentityRegistryError` with the error's name when the transaction would
-   * revert; other failures (network, wrong address) are rethrown as they are.
+   * revert, and a plain `Error` naming only the failure's code when the call
+   * could not run (a node error, a rate limit). Neither carries the request:
+   * ethers' own error holds the evidence, whose public inputs name the passport.
    */
   async check(action: IdentityAction, account: string, adapter: string, evidence: string): Promise<IdentityCheckResult> {
     try {
@@ -263,15 +265,23 @@ export class CofferdamIdentityRegistryClient {
     } catch (err) {
       const data = revertData(err)
       if (data !== null) throw new IdentityRegistryError(identityRevertName(data))
-      throw err
+      const code = typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : 'error'
+      // No `cause` on purpose: ethers' error holds the request, whose evidence names the passport.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(`[cofferdam-sdk] identity registry check could not run (${code})`)
     }
   }
 }
 
-/** The revert data of an ethers `CALL_EXCEPTION`, or null when the error is not a revert. */
+/**
+ * The revert data of an ethers `CALL_EXCEPTION`, or null when the error is not
+ * a revert. ethers also reports a JSON-RPC error on `eth_call` (a missing
+ * header, a rate limit) as `CALL_EXCEPTION`, with `data` null: that is not a
+ * revert. A revert without data has `data` `0x`.
+ */
 function revertData(err: unknown): string | null {
   if (typeof err !== 'object' || err === null) return null
   const e = err as { code?: unknown; data?: unknown }
   if (e.code !== 'CALL_EXCEPTION') return null
-  return typeof e.data === 'string' ? e.data : '0x'
+  return typeof e.data === 'string' ? e.data : null
 }

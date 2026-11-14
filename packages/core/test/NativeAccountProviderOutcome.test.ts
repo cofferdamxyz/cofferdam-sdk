@@ -36,10 +36,12 @@ function hashFor(pvg: bigint): string {
   return '0x' + pvg.toString(16).padStart(64, '0')
 }
 
-function stubChain(opts: { success: boolean; revert?: string; l1Fee?: bigint }) {
+function stubChain(opts: { success: boolean; revert?: string; l1Fee?: bigint; maxFeePerGas?: bigint }) {
   const hashed: bigint[] = []
   vi.spyOn(JsonRpcProvider.prototype, 'getCode').mockResolvedValue('0x01')
-  vi.spyOn(JsonRpcProvider.prototype, 'getFeeData').mockResolvedValue(new FeeData(10_000_000n, null, null))
+  vi.spyOn(JsonRpcProvider.prototype, 'getFeeData').mockResolvedValue(
+    new FeeData(10_000_000n, opts.maxFeePerGas ?? null, opts.maxFeePerGas !== undefined ? 1_000_000n : null),
+  )
   vi.spyOn(JsonRpcProvider.prototype, 'call').mockImplementation(async (tx) => {
     const to = String(tx.to).toLowerCase()
     const data = String(tx.data)
@@ -81,9 +83,11 @@ function provider(fetchImpl: typeof fetch, extra: { preVerificationGas?: bigint 
   })
 }
 
-function relay(sent: PackedUserOperationJson[], receipt = 'success'): typeof fetch {
+function relay(sent: PackedUserOperationJson[], receipt = 'success', bodies: Record<string, unknown>[] = []): typeof fetch {
   return async (_url, init) => {
-    sent.push((JSON.parse(String(init?.body)) as { userOp: PackedUserOperationJson }).userOp)
+    const body = JSON.parse(String(init?.body)) as { userOp: PackedUserOperationJson }
+    bodies.push(body)
+    sent.push(body.userOp)
     return new Response(JSON.stringify({ ok: true, txHash: TX, entryPoint: EP, receipt }), { status: 202 })
   }
 }
@@ -96,9 +100,11 @@ describe('NativeAccountProvider.sendTransaction checks the op itself', () => {
   it('resolves when the op succeeded', async () => {
     stubChain({ success: true })
     const sent: PackedUserOperationJson[] = []
-    const receipt = await provider(relay(sent)).sendTransaction({ to: REGISTRY, data: encodeBindCall(ACCOUNT, '0x') })
+    const bodies: Record<string, unknown>[] = []
+    const receipt = await provider(relay(sent, 'success', bodies)).sendTransaction({ to: REGISTRY, data: encodeBindCall(ACCOUNT, '0x') })
     expect(receipt.hash).toBe(TX)
     expect(sent[0].preVerificationGas).toBe('0')
+    expect(bodies[0].chainId).toBe(8453)
   })
 
   it('throws when the mined op reverted, even if the plane answered success', async () => {
@@ -126,6 +132,21 @@ describe('NativeAccountProvider.sendTransaction checks the op itself', () => {
     expect(pvg).toBeGreaterThan(137_500n + 21_000n)
     expect(pvg).toBeLessThan(137_500n + 200_000n)
     expect(hashed).toEqual([pvg])
+  })
+
+  it("prices an 'l1-fee' op at ethers' maxFeePerGas when eth_gasPrice is under it (the plane's fee floor)", async () => {
+    stubChain({ success: true, l1Fee: 10n ** 12n, maxFeePerGas: 25_000_000n })
+    const sent: PackedUserOperationJson[] = []
+    await provider(relay(sent), { preVerificationGas: 'l1-fee' }).sendTransaction({ to: REGISTRY })
+    const fees = BigInt(sent[0].gasFees)
+    expect(fees & ((1n << 128n) - 1n)).toBe(25_000_000n) // maxFeePerGas
+    expect(fees >> 128n).toBe(25_000_000n) // maxPriorityFeePerGas: the effective price is maxFeePerGas
+    // The default lane keeps eth_gasPrice.
+    vi.restoreAllMocks()
+    stubChain({ success: true, maxFeePerGas: 25_000_000n })
+    const sepolia: PackedUserOperationJson[] = []
+    await provider(relay(sepolia)).sendTransaction({ to: REGISTRY })
+    expect(BigInt(sepolia[0].gasFees) & ((1n << 128n) - 1n)).toBe(10_000_000n)
   })
 
   it('sends a fixed preVerificationGas as configured', async () => {

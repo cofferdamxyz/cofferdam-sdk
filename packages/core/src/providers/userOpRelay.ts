@@ -81,12 +81,19 @@ export function buildInitCode(
 
 /**
  * The plane refused or failed to relay the op. `code` is its error id; the
- * ones a caller acts on (cofferdam-api `routes/aa.ts`):
+ * ones a caller acts on (cofferdam-api `routes/aa.ts`). A message that names
+ * a revert names the error only (`WrongBoundDigest`, `IdentifierAlreadyBound`),
+ * never its arguments.
+ *   - `identity_check_failed` (400): on the mainnet test lane, the identity
+ *     registry's `check` refused the bind, relink or rebind; nothing was sent.
  *   - `execution_reverted` (400): the pre-flight found that the op's own call
- *     would revert; nothing was sent. `message` is the revert's error name
- *     (`WrongBoundDigest`, `IdentifierAlreadyBound`, ...), never its arguments.
+ *     would revert; nothing was sent.
  *   - `user_op_reverted` (422): mined, and the op's call reverted; `txHash` is set.
  *   - `simulation_failed` (400): validation failed (`AAxx`); nothing was sent.
+ *   - `fee_too_low`, `pre_verification_gas_too_low` (400): the mainnet test
+ *     lane's fee floor and L1-fee floor (`preVerificationGas: 'l1-fee'` meets them).
+ *   - `chain_unsupported` (400), `not_test_account` (403): the lane is off, or
+ *     the account is not on its allowlist.
  *   - `preflight_unavailable` (503): the plane's node cannot pre-flight; nothing
  *     was sent.
  *   - `rate_limited` (429), `relay_failed` (502): retry later.
@@ -124,6 +131,12 @@ export interface RelayUserOperationOptions {
   userOp: PackedUserOperation
   /** EntryPoint the op was hashed against; the plane refuses any other. */
   entryPoint: string
+  /**
+   * The op's chain. The plane picks the lane from it and takes Base Sepolia
+   * when it is absent; Base mainnet (8453) reaches only the test relay of
+   * decision 0080 M2, off unless the plane enables it.
+   */
+  chainId?: number | undefined
   fetchImpl?: typeof fetch | undefined
 }
 
@@ -138,7 +151,11 @@ export async function relayUserOperation(opts: RelayUserOperationOptions): Promi
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ entryPoint: opts.entryPoint, userOp: serializeUserOperation(opts.userOp) }),
+    body: JSON.stringify({
+      entryPoint: opts.entryPoint,
+      ...(opts.chainId !== undefined ? { chainId: opts.chainId } : {}),
+      userOp: serializeUserOperation(opts.userOp),
+    }),
   })
   const body = (await res.json().catch(() => ({}))) as {
     ok?: boolean

@@ -28,7 +28,8 @@ export const L1_FEE_MARGIN_BPS = 13_750n
 
 /**
  * Bytes of the stand-in inner signature: an `abi.encode(WebAuthnAuth)` assertion
- * is about 600 bytes; a raw P-256 or session signature is 64 or 65.
+ * measured 480 bytes with the SDK's software authenticator (a platform's
+ * `clientDataJSON` can be longer); a raw P-256 or session signature is 64 or 65.
  */
 export const STAND_IN_INNER_SIGNATURE_BYTES = 768
 
@@ -75,7 +76,11 @@ export interface EstimateL1PreVerificationGasOptions {
   entryPoint: string
   /** The op as it will be signed, with a stand-in signature (`standInSignature`). */
   userOp: PackedUserOperation
-  /** The op's `maxFeePerGas`. */
+  /**
+   * The op's `maxFeePerGas`. The plane divides by the op's effective price,
+   * `min(maxFeePerGas, maxPriorityFeePerGas + baseFee)`; the provider sets the
+   * tip equal to `maxFeePerGas`, so the two are the same.
+   */
   maxFeePerGas: bigint
 }
 

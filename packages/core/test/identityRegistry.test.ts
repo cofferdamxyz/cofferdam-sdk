@@ -23,6 +23,8 @@ import {
 // with viem and checked against the contract. Copy it again on any change
 // there; a drift fails here.
 import fixture from './fixtures/identity-digest.json' with { type: 'json' }
+// Error selectors read from the same branch's compiled artifacts.
+import errorFixture from './fixtures/identity-errors.json' with { type: 'json' }
 
 const REGISTRY = '0x00000000000000000000000000000000000c0ffe'
 const ACCOUNT = '0x1111111111111111111111111111111111111111'
@@ -88,6 +90,20 @@ describe('registry calls', () => {
     const [adapter, evidence] = IFACE.decodeFunctionData('bind', data)
     expect(String(adapter).toLowerCase()).toBe(ADAPTER)
     expect(evidence).toBe('0xdeadbeef')
+  })
+
+  it("declares every error the contracts can revert with in a call, with base-contracts' selectors", () => {
+    const declared = new Map<string, string>()
+    IFACE.forEachError((e) => declared.set(e.name, e.selector))
+    for (const [name, selector] of Object.entries(errorFixture.selectors)) {
+      if (errorFixture.constructorOnly.includes(name)) {
+        expect(declared.has(name), name).toBe(false)
+        continue
+      }
+      expect(declared.get(name), name).toBe(selector)
+      expect(identityRevertName(selector + '00'.repeat(64))).toBe(name)
+    }
+    expect([...declared.keys()].every((n) => n in errorFixture.selectors)).toBe(true)
   })
 
   it('names registry and adapter reverts without their arguments', () => {
@@ -170,14 +186,29 @@ describe('CofferdamIdentityRegistryClient', () => {
     expect((err as Error).message).not.toContain('99'.repeat(32))
   })
 
-  it('rethrows a failure that is not a revert', async () => {
-    const runner = {
-      provider: null,
-      async call() {
-        throw new Error('network down')
-      },
-    } as unknown as ContractRunner
-    const client = new CofferdamIdentityRegistryClient({ address: REGISTRY, runner })
-    await expect(client.check('bind', ACCOUNT, ADAPTER, '0x')).rejects.toThrow('network down')
+  it('reports a call that could not run apart from a revert, without the request', async () => {
+    const evidence = '0x' + '5e'.repeat(64)
+    const failing = (err: Error) =>
+      ({
+        provider: null,
+        async call() {
+          throw err
+        },
+      }) as unknown as ContractRunner
+    // ethers reports a JSON-RPC error on eth_call as CALL_EXCEPTION with data null.
+    const rpc = Object.assign(new Error('missing revert data'), { code: 'CALL_EXCEPTION', data: null, info: { evidence } })
+    for (const err of [rpc, new Error(`network down ${evidence}`)]) {
+      const client = new CofferdamIdentityRegistryClient({ address: REGISTRY, runner: failing(err) })
+      const got = await client.check('bind', ACCOUNT, ADAPTER, evidence).catch((e: unknown) => e)
+      expect(got).not.toBeInstanceOf(IdentityRegistryError)
+      expect((got as Error).message).toContain('could not run')
+      expect((got as Error).message).not.toContain('5e5e')
+      expect((got as { cause?: unknown }).cause).toBeUndefined()
+    }
+  })
+
+  it('reads a revert without data as a refusal named empty', async () => {
+    const client = new CofferdamIdentityRegistryClient({ address: REGISTRY, runner: fakeRunner('0x') })
+    await expect(client.check('bind', ACCOUNT, ADAPTER, '0x')).rejects.toMatchObject({ errorName: 'empty' })
   })
 })

@@ -737,14 +737,20 @@ export class NativeAccountProvider implements CofferdamProvider {
 
     // ── Pack gas fields for ERC-4337 v0.7 ─────────────────────────────────
     const feeData = await this.chainProvider.getFeeData()
-    const gasPrice = feeData.gasPrice ?? 1_000_000_000n
+    const pvgSetting = this.config.preVerificationGas
+    // The unsponsored mainnet lane ('l1-fee') refuses a maxFeePerGas under
+    // 1.25 × the base fee (`fee_too_low`), which `eth_gasPrice` (base fee + a
+    // small tip) can fall below: there the price is ethers' maxFeePerGas
+    // (2 × base fee + tip) when that is higher.
+    const quoted = feeData.gasPrice ?? 1_000_000_000n
+    const gasPrice =
+      pvgSetting === 'l1-fee' && feeData.maxFeePerGas !== null && feeData.maxFeePerGas > quoted ? feeData.maxFeePerGas : quoted
     const callGasLimit = req.gasLimit ?? this.config.defaultGasLimit
     const verificationGasLimit = initCode === '0x' ? callGasLimit : callGasLimit + DEPLOY_VERIFICATION_GAS
     const accountGasLimits = packGasLimits(verificationGasLimit, callGasLimit)
     const gasFees = packGasFees(gasPrice, gasPrice) // priority = base for simplicity
 
     const authorityId = req.authorityId ?? this.config.authorityId
-    const pvgSetting = this.config.preVerificationGas
 
     // ── Build the PackedUserOperation ─────────────────────────────────────
     const userOp: PackedUserOperation = {
@@ -795,6 +801,7 @@ export class NativeAccountProvider implements CofferdamProvider {
         relayerUrl: this.config.relayerUrl,
         userOp: finalUserOp,
         entryPoint: this.config.contracts.entryPoint,
+        chainId: this.config.chainId,
         fetchImpl: this.config.fetchImpl,
       })
       return confirmUserOperation({
