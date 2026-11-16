@@ -13,6 +13,7 @@ import {
   GAS_PRICE_ORACLE,
   NativeAccountProvider,
   L1_LANE_FALLBACK_TIP,
+  L1_PVG_ALLOWANCE,
   UserOpRelayError,
   UserOperationFailedError,
   encodeBindCall,
@@ -233,5 +234,28 @@ describe('relay_failed: the op is looked up before a failure is reported', () =>
       expect((err as UserOpRelayError).code).toBe(code)
       vi.restoreAllMocks()
     }
+  })
+})
+
+describe('prefundCheck (the unsponsored lane: the account pays)', () => {
+  it("prices the deploy's verification gas while counterfactual, and counts the EntryPoint deposit", async () => {
+    stubChain({ success: true, gasPrice: 10_000_100n, maxFeePerGas: 20_000_000n + 10n ** 9n, priorityFee: 10n ** 9n })
+    vi.spyOn(JsonRpcProvider.prototype, 'getCode').mockResolvedValue('0x')
+    vi.spyOn(JsonRpcProvider.prototype, 'getBalance').mockResolvedValue(7n)
+    vi.spyOn(JsonRpcProvider.prototype, 'call').mockResolvedValue(coder.encode(['uint256'], [5n]))
+    const check = await provider(relay([]), { preVerificationGas: 'l1-fee' }).prefundCheck({ gasLimit: 1_500_000n })
+    expect(check.deployed).toBe(false)
+    expect(check.available).toBe(12n)
+    // (1.5M + 3.5M deploy) + 1.5M + 500k allowance, at 2 x 10M + 100.
+    expect(check.required).toBe((5_000_000n + 1_500_000n + L1_PVG_ALLOWANCE) * 20_000_100n)
+  })
+
+  it('takes a fixed preVerificationGas as it is, and no deploy gas once deployed', async () => {
+    stubChain({ success: true })
+    vi.spyOn(JsonRpcProvider.prototype, 'getBalance').mockResolvedValue(0n)
+    vi.spyOn(JsonRpcProvider.prototype, 'call').mockResolvedValue(coder.encode(['uint256'], [0n]))
+    const check = await provider(relay([]), { preVerificationGas: 50_000n }).prefundCheck({ gasLimit: 1_000_000n })
+    expect(check.deployed).toBe(true)
+    expect(check.required).toBe((1_000_000n + 1_000_000n + 50_000n) * 10_000_000n)
   })
 })

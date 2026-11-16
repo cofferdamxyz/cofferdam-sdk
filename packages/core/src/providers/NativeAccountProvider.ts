@@ -692,6 +692,38 @@ export class NativeAccountProvider implements CofferdamProvider {
    * mined and reverted) and `UserOperationFailedError` when the op reverted,
    * did not run, or its receipt cannot be read in time (`unknown`).
    */
+  /**
+   * Whether the account can pay for an unsponsored op (decision 0080's mainnet
+   * test lane, where `paymasterAndData` is empty and the account prefunds the
+   * EntryPoint itself): `required` is the most the EntryPoint takes before
+   * running it, (verification + call + preVerificationGas) × the price
+   * `sendTransaction` would sign now, with the deploy's verification gas while
+   * the account is counterfactual; `available` is the account's balance plus
+   * its EntryPoint deposit. With `'l1-fee'` the op's preVerificationGas is
+   * known only once the op is built, so `preVerificationGasAllowance` stands in
+   * for it. A read, never a send: the price moves before the op is signed.
+   */
+  async prefundCheck(
+    opts: { gasLimit?: bigint; preVerificationGasAllowance?: bigint } = {},
+  ): Promise<PrefundCheck> {
+    const account = await this.getAccountAddress()
+    const entryPoint = new EthContract(this.config.contracts.entryPoint, ENTRY_POINT_ABI as unknown as string[], this.chainProvider)
+    const [code, feeData, balance, deposit] = await Promise.all([
+      this.chainProvider.getCode(account),
+      this.chainProvider.getFeeData(),
+      this.chainProvider.getBalance(account),
+      entryPoint.balanceOf(account) as Promise<bigint>,
+    ])
+    const deployed = code !== undefined && code !== null && code !== '0x'
+    const pvgSetting = this.config.preVerificationGas
+    const price = pvgSetting === 'l1-fee' ? l1LaneGasPrice(feeData) : (feeData.gasPrice ?? 1_000_000_000n)
+    const callGasLimit = opts.gasLimit ?? this.config.defaultGasLimit
+    const verificationGasLimit = deployed ? callGasLimit : callGasLimit + DEPLOY_VERIFICATION_GAS
+    const pvg = pvgSetting === 'l1-fee' ? (opts.preVerificationGasAllowance ?? L1_PVG_ALLOWANCE) : pvgSetting
+    const required = (verificationGasLimit + callGasLimit + pvg) * price
+    return { account, deployed, required, available: balance + deposit }
+  }
+
   async sendTransaction(req: NativeTxRequest): Promise<TransactionReceipt> {
     const accountAddress = await this.getAccountAddress()
     const deployed = await this.isDeployed()
@@ -1162,4 +1194,21 @@ export function l1LaneGasPrice(fee: {
   const base = (fee.maxFeePerGas - fee.maxPriorityFeePerGas) / 2n
   const tip = fee.gasPrice !== null && fee.gasPrice > base ? fee.gasPrice - base : L1_LANE_FALLBACK_TIP
   return 2n * base + tip
+}
+
+/**
+ * `prefundCheck`'s stand-in for an `'l1-fee'` op's preVerificationGas: the L1
+ * data fee of a bind (a few kilobytes of proof) at Base's prices is far under
+ * it, so the figure errs high.
+ */
+export const L1_PVG_ALLOWANCE = 500_000n
+
+/** `NativeAccountProvider.prefundCheck`: what an unsponsored op may take from the account, and what it holds. */
+export interface PrefundCheck {
+  account: string
+  deployed: boolean
+  /** Wei: the EntryPoint's prefund for the op at today's price. */
+  required: bigint
+  /** Wei: the account's balance plus its EntryPoint deposit. */
+  available: bigint
 }
