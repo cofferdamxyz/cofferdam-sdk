@@ -833,14 +833,15 @@ export class NativeAccountProvider implements CofferdamProvider {
           fetchImpl: this.config.fetchImpl,
         }))
       } catch (err) {
-        // A 5xx after the pre-flights (`relay_failed`) can follow a send the
-        // node accepted: look the op up before reporting a failure.
-        if (err instanceof UserOpRelayError && mayHaveBeenSent(err)) {
+        // A 5xx after the pre-flights (`relay_failed`), or a connection that
+        // dropped before the plane answered (fetch's `TypeError`), can follow a
+        // send the node accepted: look the op up before reporting a failure.
+        if ((err instanceof UserOpRelayError && mayHaveBeenSent(err)) || err instanceof TypeError) {
           return findUserOperation({
             provider: this.chainProvider,
             entryPoint: this.config.contracts.entryPoint,
             userOpHash,
-            txHash: err.txHash ?? '',
+            txHash: err instanceof UserOpRelayError ? (err.txHash ?? '') : '',
             timeoutMs: this.config.receiptTimeoutMs,
           })
         }

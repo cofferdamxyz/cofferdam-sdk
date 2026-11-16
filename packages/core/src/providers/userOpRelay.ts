@@ -99,8 +99,9 @@ export function buildInitCode(
  *   - `rate_limited` (429): nothing was sent; retry later.
  *   - `relay_failed` (502): the plane could not confirm its send, which the
  *     node may still have taken. `NativeAccountProvider.sendTransaction` looks
- *     the op up and answers its receipt, its revert, or
- *     `UserOperationFailedError('unknown')`; re-read before any retry.
+ *     the op up (as it does when the connection drops before an answer) and
+ *     answers its receipt, its revert, or `UserOperationFailedError('unknown')`;
+ *     re-read before any retry.
  */
 export class UserOpRelayError extends Error {
   constructor(

@@ -228,6 +228,15 @@ describe('relay_failed: the op is looked up before a failure is reported', () =>
     expect((err as UserOperationFailedError).reason).toBe('unknown')
   })
 
+  it('looks the op up after a dropped connection too', async () => {
+    stubChain({ success: true, landed: true })
+    const dropped: typeof fetch = async () => {
+      throw new TypeError('Network request failed')
+    }
+    const receipt = await provider(dropped).sendTransaction({ to: REGISTRY })
+    expect(receipt.hash).toBe(TX)
+  })
+
   it('passes refusals that sent nothing through unchanged', async () => {
     for (const [code, status] of [['preflight_unavailable', 503], ['fee_too_high', 400], ['rate_limited', 429]] as const) {
       stubChain({ success: true, landed: true })
