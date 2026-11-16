@@ -169,27 +169,40 @@ export interface FindUserOperationOptions {
   /** The plane's transaction, when its answer named one; only for the error. */
   txHash?: string | undefined
   lookbackBlocks?: number | undefined
+  /** How long to keep looking: a send the node took is mined seconds later. Defaults to the receipt wait. */
+  timeoutMs?: number | undefined
+  /** Between looks; 2 s by default (Base's block time). */
+  pollIntervalMs?: number | undefined
 }
 
 /**
  * Look an op up by its hash in the latest blocks, after a relay answer that
- * does not say whether it was sent (`relay_failed`). Returns the receipt of
- * the transaction that ran it successfully; throws `UserOperationFailedError`
- * `reverted` when it ran and reverted, and `unknown` when it is not found
- * (it may still land) or the chain could not be read.
+ * does not say whether it was sent (`relay_failed`, answered as soon as the
+ * node's send fails, before anything could be mined): it looks again every
+ * `pollIntervalMs` until `timeoutMs`. Returns the receipt of the transaction
+ * that ran it successfully; throws `UserOperationFailedError` `reverted` when
+ * it ran and reverted, and `unknown` when it is not found in time (it may
+ * still land) or the chain could not be read.
  */
 export async function findUserOperation(opts: FindUserOperationOptions): Promise<TransactionReceipt> {
   const { provider, entryPoint, userOpHash } = opts
   const txHash = opts.txHash ?? ''
-  let found: Log[]
-  try {
-    const toBlock = await provider.getBlockNumber()
-    const fromBlock = Math.max(0, toBlock - (opts.lookbackBlocks ?? USER_OPERATION_LOOKBACK_BLOCKS))
-    found = await provider.getLogs({ address: entryPoint, topics: [USER_OPERATION_EVENT_TOPIC, userOpHash], fromBlock, toBlock })
-  } catch {
-    throw new UserOperationFailedError('unknown', userOpHash, txHash)
+  const deadline = Date.now() + (opts.timeoutMs ?? USER_OPERATION_RECEIPT_TIMEOUT_MS)
+  const interval = opts.pollIntervalMs ?? 2_000
+  let event: Log | undefined
+  for (;;) {
+    try {
+      const toBlock = await provider.getBlockNumber()
+      const fromBlock = Math.max(0, toBlock - (opts.lookbackBlocks ?? USER_OPERATION_LOOKBACK_BLOCKS))
+      const found = await provider.getLogs({ address: entryPoint, topics: [USER_OPERATION_EVENT_TOPIC, userOpHash], fromBlock, toBlock })
+      event = found.find((l) => !l.removed)
+    } catch {
+      // A failed read is looked at again until the deadline.
+    }
+    const left = deadline - Date.now()
+    if (event || left <= 0) break
+    await new Promise((r) => setTimeout(r, Math.min(interval, left)))
   }
-  const event = found.find((l) => !l.removed)
   if (!event) throw new UserOperationFailedError('unknown', userOpHash, txHash)
   let receipt: TransactionReceipt | null
   try {

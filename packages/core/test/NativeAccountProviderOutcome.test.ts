@@ -98,7 +98,7 @@ function stubChain(opts: {
   return { hashed }
 }
 
-function provider(fetchImpl: typeof fetch, extra: { preVerificationGas?: bigint | 'l1-fee' } = {}) {
+function provider(fetchImpl: typeof fetch, extra: { preVerificationGas?: bigint | 'l1-fee'; receiptTimeoutMs?: number } = {}) {
   return new NativeAccountProvider({
     scope: 'test',
     rpcUrl: 'http://127.0.0.1:1',
@@ -219,9 +219,11 @@ describe('relay_failed: the op is looked up before a failure is reported', () =>
     expect((err as UserOperationFailedError).reason).toBe('reverted')
   })
 
-  it('throws unknown when the op is not found (it may still land)', async () => {
+  it('throws unknown when the op is not found within the wait (it may still land)', async () => {
     stubChain({ success: true, landed: false })
-    const err = await provider(failing('relay_failed', 502)).sendTransaction({ to: REGISTRY }).catch((e: unknown) => e)
+    const err = await provider(failing('relay_failed', 502), { receiptTimeoutMs: 30 })
+      .sendTransaction({ to: REGISTRY })
+      .catch((e: unknown) => e)
     expect(err).toBeInstanceOf(UserOperationFailedError)
     expect((err as UserOperationFailedError).reason).toBe('unknown')
   })

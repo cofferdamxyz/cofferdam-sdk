@@ -137,3 +137,28 @@ describe('confirmUserOperation', () => {
     await expect(confirmUserOperation({ ...base, provider: chain })).rejects.toMatchObject({ reason: 'not_executed' })
   })
 })
+
+describe('findUserOperation', () => {
+  it('looks again until the op is mined, then returns its receipt', async () => {
+    const { findUserOperation, ENTRY_POINT_EVENTS_ABI } = await import('../src/index.js')
+    const { Interface } = await import('ethers')
+    const events = new Interface(ENTRY_POINT_EVENTS_ABI as unknown as string[])
+    const ep = '0x0000000071727De22E5E9d8BAf0edAc6f37da032'
+    const hash = '0x' + 'ab'.repeat(32)
+    let looks = 0
+    const ev = events.encodeEventLog('UserOperationEvent', [hash, '0x' + '11'.repeat(20), '0x' + '00'.repeat(20), 1n, true, 1n, 1n])
+    const receipt = await findUserOperation({
+      provider: {
+        getBlockNumber: async () => 100,
+        getLogs: async () => (++looks < 3 ? [] : ([{ transactionHash: '0xtx', removed: false }] as never)),
+        getTransactionReceipt: async () => ({ hash: '0xtx', logs: [{ address: ep, ...ev }] }) as never,
+      },
+      entryPoint: ep,
+      userOpHash: hash,
+      timeoutMs: 1_000,
+      pollIntervalMs: 1,
+    })
+    expect(receipt.hash).toBe('0xtx')
+    expect(looks).toBe(3)
+  })
+})

@@ -679,20 +679,6 @@ export class NativeAccountProvider implements CofferdamProvider {
   // ── Transactions ───────────────────────────────────────────────────────────
 
   /**
-   * Submit an ERC-4337 UserOperation from the smart account, signed by the
-   * passkey authority and, by default, sponsored by the paymaster. The UserOp's
-   * callData encodes `account.execute(target, value, data)`, which the EntryPoint
-   * calls after `validateUserOp` succeeds. A not-yet-deployed account is
-   * created by this op: with `relayerUrl` the op carries `initCode`; with the
-   * PoC deployer key the factory is called first.
-   *
-   * Resolves with the receipt of the transaction that ran the op, only once the
-   * op's `UserOperationEvent.success` is true. Throws `UserOpRelayError` when
-   * the plane refuses (`execution_reverted`: nothing sent; `user_op_reverted`:
-   * mined and reverted) and `UserOperationFailedError` when the op reverted,
-   * did not run, or its receipt cannot be read in time (`unknown`).
-   */
-  /**
    * Whether the account can pay for an unsponsored op (decision 0080's mainnet
    * test lane, where `paymasterAndData` is empty and the account prefunds the
    * EntryPoint itself): `required` is the most the EntryPoint takes before
@@ -724,6 +710,20 @@ export class NativeAccountProvider implements CofferdamProvider {
     return { account, deployed, required, available: balance + deposit }
   }
 
+  /**
+   * Submit an ERC-4337 UserOperation from the smart account, signed by the
+   * passkey authority and, by default, sponsored by the paymaster. The UserOp's
+   * callData encodes `account.execute(target, value, data)`, which the EntryPoint
+   * calls after `validateUserOp` succeeds. A not-yet-deployed account is
+   * created by this op: with `relayerUrl` the op carries `initCode`; with the
+   * PoC deployer key the factory is called first.
+   *
+   * Resolves with the receipt of the transaction that ran the op, only once the
+   * op's `UserOperationEvent.success` is true. Throws `UserOpRelayError` when
+   * the plane refuses (`execution_reverted`: nothing sent; `user_op_reverted`:
+   * mined and reverted) and `UserOperationFailedError` when the op reverted,
+   * did not run, or its receipt cannot be read in time (`unknown`).
+   */
   async sendTransaction(req: NativeTxRequest): Promise<TransactionReceipt> {
     const accountAddress = await this.getAccountAddress()
     const deployed = await this.isDeployed()
@@ -841,6 +841,7 @@ export class NativeAccountProvider implements CofferdamProvider {
             entryPoint: this.config.contracts.entryPoint,
             userOpHash,
             txHash: err.txHash ?? '',
+            timeoutMs: this.config.receiptTimeoutMs,
           })
         }
         throw err
