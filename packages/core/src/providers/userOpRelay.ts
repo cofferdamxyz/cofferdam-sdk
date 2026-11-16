@@ -96,7 +96,11 @@ export function buildInitCode(
  *     the account is not on its allowlist.
  *   - `preflight_unavailable` (503): the plane's node cannot pre-flight; nothing
  *     was sent.
- *   - `rate_limited` (429), `relay_failed` (502): retry later.
+ *   - `rate_limited` (429): nothing was sent; retry later.
+ *   - `relay_failed` (502): the plane could not confirm its send, which the
+ *     node may still have taken. `NativeAccountProvider.sendTransaction` looks
+ *     the op up and answers its receipt, its revert, or
+ *     `UserOperationFailedError('unknown')`; re-read before any retry.
  */
 export class UserOpRelayError extends Error {
   constructor(
@@ -109,6 +113,14 @@ export class UserOpRelayError extends Error {
     super(`[cofferdam-sdk] relay ${code}: ${message}`)
     this.name = 'UserOpRelayError'
   }
+}
+
+/**
+ * Whether a refusal may follow a send the node took: a 5xx other than
+ * `preflight_unavailable` (503, whose pre-flight sent nothing).
+ */
+export function mayHaveBeenSent(err: UserOpRelayError): boolean {
+  return err.status >= 500 && err.code !== 'preflight_unavailable'
 }
 
 /**

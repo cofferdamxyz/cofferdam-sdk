@@ -12,9 +12,12 @@ import {
   ENTRY_POINT_EVENTS_ABI,
   GAS_PRICE_ORACLE,
   NativeAccountProvider,
+  L1_LANE_FALLBACK_TIP,
+  UserOpRelayError,
   UserOperationFailedError,
   encodeBindCall,
   identityRevertName,
+  l1LaneGasPrice,
   type PackedUserOperationJson,
 } from '../src/index.js'
 
@@ -36,12 +39,37 @@ function hashFor(pvg: bigint): string {
   return '0x' + pvg.toString(16).padStart(64, '0')
 }
 
-function stubChain(opts: { success: boolean; revert?: string; l1Fee?: bigint; maxFeePerGas?: bigint }) {
+function stubChain(opts: {
+  success: boolean
+  revert?: string
+  l1Fee?: bigint
+  maxFeePerGas?: bigint
+  priorityFee?: bigint
+  gasPrice?: bigint
+  /** What `eth_getLogs` finds of the op after a `relay_failed`: its event, or nothing. */
+  landed?: boolean
+}) {
   const hashed: bigint[] = []
   vi.spyOn(JsonRpcProvider.prototype, 'getCode').mockResolvedValue('0x01')
   vi.spyOn(JsonRpcProvider.prototype, 'getFeeData').mockResolvedValue(
-    new FeeData(10_000_000n, opts.maxFeePerGas ?? null, opts.maxFeePerGas !== undefined ? 1_000_000n : null),
+    new FeeData(
+      opts.gasPrice ?? 10_000_000n,
+      opts.maxFeePerGas ?? null,
+      opts.maxFeePerGas !== undefined ? (opts.priorityFee ?? 1_000_000n) : null,
+    ),
   )
+  vi.spyOn(JsonRpcProvider.prototype, 'getBlockNumber').mockResolvedValue(500)
+  vi.spyOn(JsonRpcProvider.prototype, 'getLogs').mockImplementation(async (filter) => {
+    if (!opts.landed) return []
+    const hash = hashFor(hashed[hashed.length - 1] ?? 0n)
+    expect((filter as { topics: string[] }).topics[1]).toBe(hash)
+    return [{ transactionHash: TX, removed: false }] as never
+  })
+  vi.spyOn(JsonRpcProvider.prototype, 'getTransactionReceipt').mockImplementation(async () => {
+    const hash = hashFor(hashed[hashed.length - 1] ?? 0n)
+    const ev = EVENTS.encodeEventLog('UserOperationEvent', [hash, ACCOUNT, '0x' + '00'.repeat(20), 5n, opts.success, 1n, 1n])
+    return { hash: TX, status: 1, blockNumber: 499, logs: [{ address: EP, ...ev }] } as unknown as TransactionReceipt
+  })
   vi.spyOn(JsonRpcProvider.prototype, 'call').mockImplementation(async (tx) => {
     const to = String(tx.to).toLowerCase()
     const data = String(tx.data)
@@ -154,5 +182,56 @@ describe('NativeAccountProvider.sendTransaction checks the op itself', () => {
     const sent: PackedUserOperationJson[] = []
     await provider(relay(sent), { preVerificationGas: 50_000n }).sendTransaction({ to: REGISTRY })
     expect(sent[0].preVerificationGas).toBe('50000')
+  })
+})
+
+describe("'l1-fee' price (the mainnet test lane caps maxFeePerGas at 1 gwei)", () => {
+  it("never uses ethers' 1 gwei stand-in tip: 2 × base fee + eth_gasPrice's tip", async () => {
+    // eth_maxPriorityFeePerGas failed: ethers reports 2 × 10M + 1 gwei.
+    stubChain({ success: true, gasPrice: 10_000_100n, maxFeePerGas: 20_000_000n + 10n ** 9n, priorityFee: 10n ** 9n })
+    const sent: PackedUserOperationJson[] = []
+    await provider(relay(sent), { preVerificationGas: 'l1-fee' }).sendTransaction({ to: REGISTRY })
+    expect(BigInt(sent[0].gasFees) & ((1n << 128n) - 1n)).toBe(20_000_100n)
+  })
+
+  it('takes the fallback tip when eth_gasPrice is at or under the base fee, and eth_gasPrice without fee data', () => {
+    expect(l1LaneGasPrice({ gasPrice: 9n, maxFeePerGas: 21n, maxPriorityFeePerGas: 1n })).toBe(20n + L1_LANE_FALLBACK_TIP)
+    expect(l1LaneGasPrice({ gasPrice: 12n, maxFeePerGas: 21n, maxPriorityFeePerGas: 1n })).toBe(22n)
+    expect(l1LaneGasPrice({ gasPrice: 7n, maxFeePerGas: null, maxPriorityFeePerGas: null })).toBe(7n)
+  })
+})
+
+describe('relay_failed: the op is looked up before a failure is reported', () => {
+  function failing(code: string, status: number): typeof fetch {
+    return async () => new Response(JSON.stringify({ ok: false, error: code, message: 'x' }), { status })
+  }
+
+  it('resolves with the receipt when the op landed despite the 502', async () => {
+    stubChain({ success: true, landed: true })
+    const receipt = await provider(failing('relay_failed', 502)).sendTransaction({ to: REGISTRY })
+    expect(receipt.hash).toBe(TX)
+  })
+
+  it('throws reverted when the landed op reverted', async () => {
+    stubChain({ success: false, landed: true })
+    const err = await provider(failing('relay_failed', 502)).sendTransaction({ to: REGISTRY }).catch((e: unknown) => e)
+    expect((err as UserOperationFailedError).reason).toBe('reverted')
+  })
+
+  it('throws unknown when the op is not found (it may still land)', async () => {
+    stubChain({ success: true, landed: false })
+    const err = await provider(failing('relay_failed', 502)).sendTransaction({ to: REGISTRY }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(UserOperationFailedError)
+    expect((err as UserOperationFailedError).reason).toBe('unknown')
+  })
+
+  it('passes refusals that sent nothing through unchanged', async () => {
+    for (const [code, status] of [['preflight_unavailable', 503], ['fee_too_high', 400], ['rate_limited', 429]] as const) {
+      stubChain({ success: true, landed: true })
+      const err = await provider(failing(code, status)).sendTransaction({ to: REGISTRY }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(UserOpRelayError)
+      expect((err as UserOpRelayError).code).toBe(code)
+      vi.restoreAllMocks()
+    }
   })
 })

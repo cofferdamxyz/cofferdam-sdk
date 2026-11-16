@@ -10,9 +10,13 @@ import {
   IDENTITY_ACTION_TAGS,
   IdentityRegistryError,
   encodeBindCall,
+  encodeCancelRebindCall,
+  encodeFinalizeRebindCall,
+  encodeRequestRebindCall,
   encodeZkpEvidence,
   identityDigest,
   identityRevertName,
+  rebindRequestedFromLogs,
   zkpCustomData,
   zkpEvidenceFromParams,
   type IdentityAction,
@@ -90,6 +94,31 @@ describe('registry calls', () => {
     const [adapter, evidence] = IFACE.decodeFunctionData('bind', data)
     expect(String(adapter).toLowerCase()).toBe(ADAPTER)
     expect(evidence).toBe('0xdeadbeef')
+  })
+
+  it('rebind calldata: requestRebind(address,bytes), finalizeRebind(bytes32), cancelRebind(bytes32)', () => {
+    const id = '0x' + '77'.repeat(32)
+    const req = encodeRequestRebindCall(ADAPTER, '0xdeadbeef')
+    expect(req.slice(0, 10)).toBe(IFACE.getFunction('requestRebind(address,bytes)')!.selector)
+    const [adapter, evidence] = IFACE.decodeFunctionData('requestRebind', req)
+    expect(String(adapter).toLowerCase()).toBe(ADAPTER)
+    expect(evidence).toBe('0xdeadbeef')
+    expect(IFACE.decodeFunctionData('finalizeRebind', encodeFinalizeRebindCall(id))[0]).toBe(id)
+    expect(IFACE.decodeFunctionData('cancelRebind', encodeCancelRebindCall(id))[0]).toBe(id)
+    expect(encodeFinalizeRebindCall(id).slice(0, 10)).not.toBe(encodeCancelRebindCall(id).slice(0, 10))
+  })
+
+  it("reads the new account's RebindRequested from a receipt's logs, skipping others", () => {
+    const id = '0x' + '77'.repeat(32)
+    const OLD = '0x3333333333333333333333333333333333333333'
+    const OTHER = '0x4444444444444444444444444444444444444444'
+    const event = IFACE.getEvent('RebindRequested')!
+    const log = (address: string, newAccount: string) => ({ address, ...IFACE.encodeEventLog(event, [OLD, newAccount, id, 5n, 1_800_000_000n]) })
+    const logs = [log(OTHER, ACCOUNT), log(REGISTRY, OTHER), log(REGISTRY, ACCOUNT)]
+    const got = rebindRequestedFromLogs(logs, REGISTRY.toUpperCase().replace('0X', '0x'), ACCOUNT)
+    expect(got).toEqual({ oldAccount: OLD, newAccount: ACCOUNT, identifier: id, readyAt: 1_800_000_000 })
+    expect(rebindRequestedFromLogs(logs.slice(0, 2), REGISTRY, ACCOUNT)).toBeNull()
+    expect(rebindRequestedFromLogs([{ address: REGISTRY, topics: ['0x' + '00'.repeat(32)], data: '0x' }], REGISTRY, ACCOUNT)).toBeNull()
   })
 
   it("declares every error the contracts can revert with in a call, with base-contracts' selectors", () => {

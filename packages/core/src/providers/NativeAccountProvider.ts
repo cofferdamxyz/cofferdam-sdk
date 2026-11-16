@@ -97,8 +97,8 @@ import {
 import { jwkThumbprint } from '../identity/deviceKey.js'
 import { SignInRejected } from './MockProvider.js'
 import { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './permission.js'
-import { buildInitCode, relayUserOperation, type PackedUserOperation } from './userOpRelay.js'
-import { confirmUserOperation } from './userOpOutcome.js'
+import { buildInitCode, mayHaveBeenSent, relayUserOperation, UserOpRelayError, type PackedUserOperation } from './userOpRelay.js'
+import { confirmUserOperation, findUserOperation } from './userOpOutcome.js'
 import { estimateL1PreVerificationGas, standInSignature } from './preVerificationGas.js'
 import type {
   AuthorityDescriptor,
@@ -738,14 +738,7 @@ export class NativeAccountProvider implements CofferdamProvider {
     // ── Pack gas fields for ERC-4337 v0.7 ─────────────────────────────────
     const feeData = await this.chainProvider.getFeeData()
     const pvgSetting = this.config.preVerificationGas
-    // The unsponsored mainnet lane ('l1-fee') refuses a maxFeePerGas under the
-    // latest base fee (`fee_too_low`). `eth_gasPrice` (base fee + a small tip)
-    // sits just above it and falls under it if the base fee rises before the
-    // plane checks, so there the price is ethers' maxFeePerGas (2 × base fee +
-    // tip) when that is higher.
-    const quoted = feeData.gasPrice ?? 1_000_000_000n
-    const gasPrice =
-      pvgSetting === 'l1-fee' && feeData.maxFeePerGas !== null && feeData.maxFeePerGas > quoted ? feeData.maxFeePerGas : quoted
+    const gasPrice = pvgSetting === 'l1-fee' ? l1LaneGasPrice(feeData) : (feeData.gasPrice ?? 1_000_000_000n)
     const callGasLimit = req.gasLimit ?? this.config.defaultGasLimit
     const verificationGasLimit = initCode === '0x' ? callGasLimit : callGasLimit + DEPLOY_VERIFICATION_GAS
     const accountGasLimits = packGasLimits(verificationGasLimit, callGasLimit)
@@ -798,13 +791,28 @@ export class NativeAccountProvider implements CofferdamProvider {
     // paymaster). Its 202 says only that the op was sent: whatever its
     // `receipt` field says, the op's own event decides (decision 0080 (3)).
     if (this.config.relayerUrl) {
-      const { txHash } = await relayUserOperation({
-        relayerUrl: this.config.relayerUrl,
-        userOp: finalUserOp,
-        entryPoint: this.config.contracts.entryPoint,
-        chainId: this.config.chainId,
-        fetchImpl: this.config.fetchImpl,
-      })
+      let txHash: string
+      try {
+        ;({ txHash } = await relayUserOperation({
+          relayerUrl: this.config.relayerUrl,
+          userOp: finalUserOp,
+          entryPoint: this.config.contracts.entryPoint,
+          chainId: this.config.chainId,
+          fetchImpl: this.config.fetchImpl,
+        }))
+      } catch (err) {
+        // A 5xx after the pre-flights (`relay_failed`) can follow a send the
+        // node accepted: look the op up before reporting a failure.
+        if (err instanceof UserOpRelayError && mayHaveBeenSent(err)) {
+          return findUserOperation({
+            provider: this.chainProvider,
+            entryPoint: this.config.contracts.entryPoint,
+            userOpHash,
+            txHash: err.txHash ?? '',
+          })
+        }
+        throw err
+      }
       return confirmUserOperation({
         provider: this.chainProvider,
         entryPoint: this.config.contracts.entryPoint,
@@ -1128,4 +1136,30 @@ function packGasFees(maxPriorityFeePerGas: bigint, maxFeePerGas: bigint): string
   const mask = (1n << 128n) - 1n
   const packed = (maxPriorityFeePerGas & mask) << 128n | (maxFeePerGas & mask)
   return '0x' + packed.toString(16).padStart(64, '0')
+}
+
+/** The tip used when the node's own suggestion cannot be read: 0.001 gwei, Base's usual. */
+export const L1_LANE_FALLBACK_TIP = 1_000_000n
+
+/**
+ * The op's price on the unsponsored mainnet lane (`preVerificationGas:
+ * 'l1-fee'`): 2 × the latest base fee + the node's tip. The lane refuses a
+ * price under the base fee (`fee_too_low`), and `eth_gasPrice` (base fee + a
+ * small tip) falls under it when the base fee rises before the plane checks,
+ * hence the doubled base fee. ethers' `getFeeData` substitutes 1 gwei for the
+ * tip when `eth_maxPriorityFeePerGas` fails, which the lane's 1 gwei cap
+ * refuses (`fee_too_high`), so its tip is never used: the base fee is
+ * recovered from its `maxFeePerGas = 2 × base + tip`, and the tip is
+ * `eth_gasPrice` minus the base fee (op-geth's suggestion), else
+ * `L1_LANE_FALLBACK_TIP`.
+ */
+export function l1LaneGasPrice(fee: {
+  gasPrice: bigint | null
+  maxFeePerGas: bigint | null
+  maxPriorityFeePerGas: bigint | null
+}): bigint {
+  if (fee.maxFeePerGas === null || fee.maxPriorityFeePerGas === null) return fee.gasPrice ?? 1_000_000_000n
+  const base = (fee.maxFeePerGas - fee.maxPriorityFeePerGas) / 2n
+  const tip = fee.gasPrice !== null && fee.gasPrice > base ? fee.gasPrice - base : L1_LANE_FALLBACK_TIP
+  return 2n * base + tip
 }

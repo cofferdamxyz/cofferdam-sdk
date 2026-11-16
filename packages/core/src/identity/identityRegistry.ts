@@ -20,6 +20,14 @@
  *      which throws unless the operation itself succeeded).
  *   5. `client.isAccountBound(account)` says "verified".
  *
+ * A re-bind (decision 0022) moves a bound identifier to a new, unbound
+ * account: the new account proves against `customData('rebind', account)`,
+ * checks with `check('rebind', …)` and sends `encodeRequestRebindCall`. After
+ * the registry's `REBIND_DELAY` anyone sends `encodeFinalizeRebindCall(identifier)`,
+ * the identifier read from the request's own `RebindRequested` event
+ * (`rebindRequestedFromLogs`), never stored; the bound account may veto it
+ * meanwhile with `encodeCancelRebindCall`.
+ *
  * The encodings must equal base-contracts' `scripts/lib/identity.ts` byte for
  * byte; `test/fixtures/identity-digest.json` (copied from base-contracts)
  * pins the digest and `custom_data`.
@@ -118,6 +126,11 @@ export function zkpEvidenceFromParams(params: ZkpSolidityParams): string {
 /** The registry's surface this SDK uses, with the registry's and the adapter's errors so reverts decode by name. */
 export const COFFERDAM_IDENTITY_REGISTRY_ABI = [
   'function bind(address adapter, bytes evidence)',
+  'function requestRebind(address adapter, bytes evidence)',
+  'function finalizeRebind(bytes32 identifier)',
+  'function cancelRebind(bytes32 identifier)',
+  'function pendingRebind(bytes32 identifier) view returns (address oldAccount, address newAccount, uint48 readyAt, address adapter)',
+  'event RebindRequested(address indexed oldAccount, address indexed newAccount, bytes32 indexed identifier, uint256 nonce, uint48 readyAt)',
   'function digest(bytes32 action, address account) view returns (bytes32)',
   'function nonces(address account) view returns (uint256)',
   'function isAccountBound(address account) view returns (bool)',
@@ -175,6 +188,66 @@ export function encodeBindCall(adapter: string, evidence: string): string {
   return REGISTRY_IFACE.encodeFunctionData('bind', [adapter, evidence])
 }
 
+/**
+ * Calldata for `registry.requestRebind(adapter, evidence)`, sent by the new,
+ * unbound account with a proof bound to `customData('rebind', account)`.
+ */
+export function encodeRequestRebindCall(adapter: string, evidence: string): string {
+  return REGISTRY_IFACE.encodeFunctionData('requestRebind', [adapter, evidence])
+}
+
+/** Calldata for `registry.finalizeRebind(identifier)`, once the pending rebind's `readyAt` has passed (anyone may send it). */
+export function encodeFinalizeRebindCall(identifier: string): string {
+  return REGISTRY_IFACE.encodeFunctionData('finalizeRebind', [identifier])
+}
+
+/** Calldata for `registry.cancelRebind(identifier)`, sent by the account the identifier is bound to now. */
+export function encodeCancelRebindCall(identifier: string): string {
+  return REGISTRY_IFACE.encodeFunctionData('cancelRebind', [identifier])
+}
+
+/** A `RebindRequested` event: `identifier` names the passport, so keep it in memory only. */
+export interface RebindRequest {
+  oldAccount: string
+  newAccount: string
+  identifier: string
+  /** Unix seconds from which `finalizeRebind` applies it. */
+  readyAt: number
+}
+
+/**
+ * The rebind request `newAccount` made, from a receipt's logs (the
+ * `requestRebind` op's transaction); null when the logs hold none. Logs of
+ * other contracts and other accounts are skipped.
+ */
+export function rebindRequestedFromLogs(
+  logs: readonly { address: string; topics: readonly string[]; data: string }[],
+  registry: string,
+  newAccount: string,
+): RebindRequest | null {
+  const reg = registry.toLowerCase()
+  const want = newAccount.toLowerCase()
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== reg) continue
+    let parsed
+    try {
+      parsed = REGISTRY_IFACE.parseLog({ topics: [...log.topics], data: log.data })
+    } catch {
+      continue
+    }
+    if (parsed?.name !== 'RebindRequested') continue
+    const to = (parsed.args.getValue('newAccount') as string).toLowerCase()
+    if (to !== want) continue
+    return {
+      oldAccount: parsed.args.getValue('oldAccount') as string,
+      newAccount: parsed.args.getValue('newAccount') as string,
+      identifier: parsed.args.getValue('identifier') as string,
+      readyAt: Number(parsed.args.getValue('readyAt') as bigint),
+    }
+  }
+  return null
+}
+
 const ERROR_STRING = '0x08c379a0'
 const PANIC = '0x4e487b71'
 
@@ -215,7 +288,16 @@ export interface IdentityCheckResult {
   counterpart: string
 }
 
-/** Read-only client for `CofferdamIdentityRegistry`. Writes go through the account (`encodeBindCall`). */
+/** A pending rebind as the registry holds it; `newAccount` is the zero address when none is pending. */
+export interface PendingRebind {
+  oldAccount: string
+  newAccount: string
+  /** Unix seconds. */
+  readyAt: number
+  adapter: string
+}
+
+/** Read-only client for `CofferdamIdentityRegistry`. Writes go through the account (`encodeBindCall`, `encodeRequestRebindCall`, `encodeFinalizeRebindCall`). */
 export class CofferdamIdentityRegistryClient {
   readonly address: string
   private readonly contract: EthContract
@@ -238,6 +320,17 @@ export class CofferdamIdentityRegistryClient {
   /** The nonce the account's next proof is bound to; each bind, relink or rebind request consumes one. */
   async nonces(account: string): Promise<bigint> {
     return (await this.contract.getFunction('nonces')(account)) as bigint
+  }
+
+  /** The rebind of `identifier` waiting for `REBIND_DELAY`; `newAccount` is the zero address when none is pending. */
+  async pendingRebind(identifier: string): Promise<PendingRebind> {
+    const [oldAccount, newAccount, readyAt, adapter] = (await this.contract.getFunction('pendingRebind')(identifier)) as [
+      string,
+      string,
+      bigint,
+      string,
+    ]
+    return { oldAccount, newAccount, readyAt: Number(readyAt), adapter }
   }
 
   /** Whether an identifier is bound to `account`. */

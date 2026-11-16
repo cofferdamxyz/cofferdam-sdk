@@ -161,3 +161,47 @@ export async function confirmUserOperation(opts: ConfirmUserOperationOptions): P
   }
   throw new UserOperationFailedError('unknown', userOpHash, earlier.hash)
 }
+
+export interface FindUserOperationOptions {
+  provider: Pick<Provider, 'getBlockNumber' | 'getTransactionReceipt' | 'getLogs'>
+  entryPoint: string
+  userOpHash: string
+  /** The plane's transaction, when its answer named one; only for the error. */
+  txHash?: string | undefined
+  lookbackBlocks?: number | undefined
+}
+
+/**
+ * Look an op up by its hash in the latest blocks, after a relay answer that
+ * does not say whether it was sent (`relay_failed`). Returns the receipt of
+ * the transaction that ran it successfully; throws `UserOperationFailedError`
+ * `reverted` when it ran and reverted, and `unknown` when it is not found
+ * (it may still land) or the chain could not be read.
+ */
+export async function findUserOperation(opts: FindUserOperationOptions): Promise<TransactionReceipt> {
+  const { provider, entryPoint, userOpHash } = opts
+  const txHash = opts.txHash ?? ''
+  let found: Log[]
+  try {
+    const toBlock = await provider.getBlockNumber()
+    const fromBlock = Math.max(0, toBlock - (opts.lookbackBlocks ?? USER_OPERATION_LOOKBACK_BLOCKS))
+    found = await provider.getLogs({ address: entryPoint, topics: [USER_OPERATION_EVENT_TOPIC, userOpHash], fromBlock, toBlock })
+  } catch {
+    throw new UserOperationFailedError('unknown', userOpHash, txHash)
+  }
+  const event = found.find((l) => !l.removed)
+  if (!event) throw new UserOperationFailedError('unknown', userOpHash, txHash)
+  let receipt: TransactionReceipt | null
+  try {
+    receipt = await provider.getTransactionReceipt(event.transactionHash)
+  } catch {
+    receipt = null
+  }
+  if (!receipt) throw new UserOperationFailedError('unknown', userOpHash, event.transactionHash)
+  const outcome = userOperationOutcome(receipt.logs, entryPoint, userOpHash)
+  if (outcome.status === 'success') return receipt
+  if (outcome.status === 'reverted') {
+    throw new UserOperationFailedError('reverted', userOpHash, receipt.hash, outcome.revertData, outcome.stage)
+  }
+  throw new UserOperationFailedError('unknown', userOpHash, receipt.hash)
+}
