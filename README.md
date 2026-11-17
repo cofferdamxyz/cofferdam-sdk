@@ -127,6 +127,41 @@ const selfSecret = selfSecretFromPhrase(phrase)               // the passport se
 
 The salt, the labels and `COFFERDAM_PRF_SALT` are frozen once a Vault exists. The recovery material takes a rotation index (`deriveRecoveryKeyMaterial(seed, index)`); its curve and commitment belong to the recovery design.
 
+## Handles, stealth addresses and handshakes
+
+The keys and codecs of Cofferdam decision 0086 (accepted 2026-11-15; its questions 11 to 23 are open, and the code marks each one it assumes with `ASSUMPTION(0086 qNN)`). No client and no network call yet: the plane's registry, the anchor contract and the app build on these.
+
+```ts
+import {
+  toHandle, handleId, phraseSeed, deriveHandleEpochKeys, generateStealthAddress, scanAnnouncement,
+  FIXTURE_ONE_TIME_FACTORY, handleAnchorDomain, signHandleTypedData, createHandshakeHalf, verifyHandshakeHalf,
+} from '@cofferdam/sdk'
+
+const label = toHandle('@Ana')                          // 'ana': ENS label rules, ENSIP-15, 3 to 64 characters
+const id = handleId(label!)                            // keccak256("cofferdam-handle-v1:" + label)
+const keys = deriveHandleEpochKeys(phraseSeed(phrase), 0) // handle key, stealth keys, meta-address, self seed of epoch 0
+
+// payer: derive a one-time address from the meta-address it checked against the anchor
+const pay = generateStealthAddress(metaAddress, FIXTURE_ONE_TIME_FACTORY) // account, signer, R, view tag, h
+
+// recipient: scan an announcement with the viewing key
+const mine = scanAnnouncement(announcement, { viewingPrivateKey, spendingPublicKey, factory: FIXTURE_ONE_TIME_FACTORY })
+
+// anchor calls and registry requests are EIP-712, signed by the handle key
+const sig = signHandleTypedData(keys.handleKey.privateKey, handleAnchorDomain(84532, anchorAddress), 'Release', { handleId: id, nonce, deadline })
+
+// handshake: a signed half with a fresh X25519 key, checked against the anchor's owner
+const { half, ephemeralPrivateKey } = createHandshakeHalf({ handleKey, handle: 'ana', serial, inboxId, chainId: 84532, carrier: 'qr' })
+verifyHandshakeHalf(half, { chainId: 84532, anchor: { owner, serial, frozen, pendingChange }, isReplay })
+```
+
+- `rootKeys.ts` gains the seed-level handle keys under their own frozen labels (`HANDLE_SEED_LABELS`): the handle root per epoch, the Tier 1 XMTP key on its own counter, the XMTP recovery identity and a releasing label's release key. Decision 0081's labels are unchanged.
+- `handleRoot.ts`: an epoch's keys, the self-derived ephemeral keys by phone slot (0 to 15) and index with the recovery walk under a gap limit, and the epoch search against the anchor's `owner`.
+- `stealth.ts`: ERC-5564 scheme 1 (66-byte meta-address, spending key first, compressed; `h = keccak256` of the compressed shared point, view tag `h[0]`, `P = S + h·G`), the one-time account as a CREATE2 function of a factory, and the plane's registration check `P = S + h·G` without the viewing key. `FIXTURE_ONE_TIME_FACTORY` is a never-deployed placeholder until the one-time factory of decision 0083 rule 4 exists; pass the real one then.
+- `handle.ts`: the grammar, `handleId`, and the EIP-712 domains and types of every signed anchor call and registry request.
+- `handshake.ts`: the half and its reply, the pairwise secret (HKDF over X25519), the rename notice and the contact record codec (no address).
+- `packages/core/test/fixtures/handleAnchorTypes.json` is the shared fixture the anchor contract's and the plane's tests read: type strings, typehashes, domain separators, a signature per type from fixed test keys, and stealth vectors. `yarn test` fails when the SDK drifts from it; `WRITE_HANDLE_FIXTURE=1 yarn test handleFixture` rewrites it.
+
 ## Escrow
 
 ```ts
@@ -180,6 +215,7 @@ Profiles: `verified-br`, `verified-us`, `unverified`, `ofac-flagged`, `stale-pro
 | Accounts that start from a partner app's passkey; first Cofferdam passkey on such an account | 📋 Planned |
 | `csa1:` version 2: device binding, expiry, audience, fast and slow tiers | ✅ Built |
 | `csa1:` version 2's `actions[]`, signed by a partner app's key | 📋 Planned |
+| Handle keys and codecs of decision 0086: grammar, `handleId`, epoch keys, ERC-5564 scheme 1, EIP-712 types of the anchor and registry, handshake halves, rename notice, contact record | ✅ Built (no client yet; open questions assumed in code) |
 | Handle resolution (pay a user by handle, verified against an on-chain anchor) | 📋 Planned |
 | Account generations: enumerate a user's earlier account addresses and move their balances | 📋 Planned |
 | Account recovery client | 📋 Planned |

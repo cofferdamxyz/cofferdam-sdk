@@ -206,3 +206,103 @@ export function deriveRootKeys(phrase: string): CofferdamRootKeys {
     seed.fill(0)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Handle keys (workspace decision 0086 rule 1). Kept apart from
+// ROOT_KEY_LABELS so the labels decision 0081 froze, and the test that pins
+// them, stay byte for byte as they were. Each label below is frozen once a
+// handle is claimed with it. Everything under the handle root (the handle
+// key, the stealth keys, the self-derivation seed) is `handleRoot.ts`'s.
+// ---------------------------------------------------------------------------
+
+/**
+ * HKDF labels of decision 0086's seed-level keys, under the same salt as the
+ * root keys. Frozen once a handle is claimed with them.
+ */
+export const HANDLE_SEED_LABELS = Object.freeze({
+  /** `cofferdam-handle-root-v1:<epoch>`: the handle root of epoch e (rule 1). */
+  handleRoot: 'cofferdam-handle-root-v1',
+  // ASSUMPTION(0086 q12): the Tier 1 XMTP identity key leaves the handle root
+  // for a counter of its own, `cofferdam-tier1-v1:<k>`, k from 0. Open; this
+  // is the one place the label lives, so another ruling moves only this line.
+  /** `cofferdam-tier1-v1:<k>`: the Tier 1 XMTP identity key, k from 0 (question 12, open). */
+  tier1: 'cofferdam-tier1-v1',
+  /** `cofferdam-xmtp-recovery-v1`: the XMTP recovery identity, kept by the phrase alone (rule 1). */
+  xmtpRecovery: 'cofferdam-xmtp-recovery-v1',
+  // ASSUMPTION(0086 q13): a releasing label's owner moves to a release key
+  // only the phrase derives, `cofferdam-handle-release-v1:<handleId>`, with
+  // handleId written as 0x-prefixed lowercase hex. Open.
+  /** `cofferdam-handle-release-v1:<handleId hex>`: the release key of a releasing label (question 13, open). */
+  handleRelease: 'cofferdam-handle-release-v1',
+} as const)
+
+function assertIndex(name: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`rootKeys: the ${name} must be a non-negative integer`)
+  }
+}
+
+// ASSUMPTION(0086 rule 1): the epoch is written in decimal after the colon,
+// as the recovery index is, and every handle label shares ROOT_KEYS_SALT.
+/**
+ * The handle root of epoch `epoch` (decision 0086 rule 1): the 32-byte input
+ * every key of that epoch derives from (`deriveHandleEpochKeys`). Epochs
+ * start at 0 and rise with each advance; a phrase rotation starts the new
+ * phrase's epoch 0.
+ *
+ * @param seed - The phrase's 64-byte seed (`phraseSeed`).
+ * @param epoch - The epoch, a non-negative safe integer.
+ * @returns 32 bytes. Never leaves a phrase phone; a linked phone receives
+ *   the derived non-spending keys, never this root.
+ */
+export function deriveHandleRoot(seed: Uint8Array, epoch: number): Uint8Array {
+  assertSeed(seed)
+  assertIndex('epoch', epoch)
+  return deriveLabelled(seed, `${HANDLE_SEED_LABELS.handleRoot}:${epoch}`)
+}
+
+/**
+ * Key material of the Tier 1 XMTP identity key number `k` (decision 0086
+ * question 12, open; see `HANDLE_SEED_LABELS.tier1`). `handleRoot.ts` turns it
+ * into a secp256k1 key.
+ *
+ * @param seed - The phrase's 64-byte seed.
+ * @param k - The key's counter, a non-negative safe integer; 0 first.
+ * @returns 32 bytes.
+ */
+export function deriveTier1KeyMaterial(seed: Uint8Array, k = 0): Uint8Array {
+  assertSeed(seed)
+  assertIndex('Tier 1 counter', k)
+  return deriveLabelled(seed, `${HANDLE_SEED_LABELS.tier1}:${k}`)
+}
+
+/**
+ * Key material of the XMTP recovery identity (decision 0086 rule 1): it
+ * revokes installations and replaces identity keys, and only the phrase
+ * derives it. `handleRoot.ts` turns it into a secp256k1 key.
+ *
+ * @param seed - The phrase's 64-byte seed.
+ * @returns 32 bytes.
+ */
+export function deriveXmtpRecoveryKeyMaterial(seed: Uint8Array): Uint8Array {
+  assertSeed(seed)
+  return deriveLabelled(seed, HANDLE_SEED_LABELS.xmtpRecovery)
+}
+
+/**
+ * Key material of the release key of one releasing label (decision 0086
+ * question 13, open; see `HANDLE_SEED_LABELS.handleRelease`).
+ *
+ * @param seed - The phrase's 64-byte seed (the new phrase's after a rotation).
+ * @param handleId - The label's 32-byte `handleId`.
+ * @returns 32 bytes.
+ */
+export function deriveHandleReleaseKeyMaterial(seed: Uint8Array, handleId: Uint8Array): Uint8Array {
+  assertSeed(seed)
+  if (!(handleId instanceof Uint8Array) || handleId.length !== KEY_BYTES) {
+    throw new Error(`rootKeys: the handleId must be ${KEY_BYTES} bytes`)
+  }
+  let hex = ''
+  for (const b of handleId) hex += b.toString(16).padStart(2, '0')
+  return deriveLabelled(seed, `${HANDLE_SEED_LABELS.handleRelease}:0x${hex}`)
+}
