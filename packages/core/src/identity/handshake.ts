@@ -287,7 +287,9 @@ export function verifyHandshakeHalf(
   if (opts.selfHandle !== undefined && half.peerHandle !== null && half.peerHandle !== opts.selfHandle) {
     throw new HandshakeError('wrong-peer', 'handshake: the half names another peer')
   }
-  if (opts.inReplyTo !== undefined) {
+  if (opts.inReplyTo === undefined) {
+    if (half.replyTo !== null) throw new HandshakeError('wrong-reply', 'handshake: a reply checked as a first half')
+  } else {
     if (half.replyTo !== handshakeHalfDigest(opts.inReplyTo, opts.chainId)) {
       throw new HandshakeError('wrong-reply', 'handshake: the reply does not answer this half')
     }
@@ -334,6 +336,7 @@ export function deriveHandshakeSecret(input: {
   chainId: number
 }): Uint8Array {
   const { first, reply, chainId } = input
+  if (first.replyTo !== null) throw new HandshakeError('wrong-reply', 'handshake: the first half is itself a reply')
   const firstDigest = handshakeHalfDigest(first, chainId)
   if (reply.replyTo !== firstDigest) throw new HandshakeError('wrong-reply', 'handshake: the reply does not answer the first half')
   const own = hexlify(x25519.getPublicKey(input.ephemeralPrivateKey))
@@ -384,7 +387,11 @@ export interface RenameNotice {
   issuedAt: number
   oldSignature: string
   newSignature: string
-  /** The plane's signed statement that both handles belong to one identity, as the plane encodes it; carried, never published. */
+  /**
+   * The plane's signed statement that both handles belong to one identity, as the plane encodes it; carried, never
+   * published. The handle keys' signatures do not cover it, so the plane's statement must name both handleIds and
+   * the app must check that it does (runbook step 3).
+   */
   identityStatement: string
 }
 
@@ -717,6 +724,9 @@ function assertNoticeShape(o: unknown, signed: boolean): asserts o is RenameNoti
     if (typeof n[k] !== 'string' || !isHandle(n[k])) throw new HandshakeError('malformed', `handshake: bad ${k}`)
   }
   if (n.oldHandle === n.newHandle) throw new HandshakeError('malformed', 'handshake: a rename keeps no label')
+  if (typeof n.oldOwner === 'string' && typeof n.newOwner === 'string' && n.oldOwner.toLowerCase() === n.newOwner.toLowerCase()) {
+    throw new HandshakeError('malformed', 'handshake: a rename moves to a new handle key')
+  }
   assertHex32('oldHandleId', n.oldHandleId)
   assertHex32('newHandleId', n.newHandleId)
   assertSerial(n.oldSerial)

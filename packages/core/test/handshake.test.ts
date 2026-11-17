@@ -102,6 +102,8 @@ describe('handshake halves', () => {
     expect(code(() => verifyHandshakeHalf(b.half, { ...opts, selfHandle: 'cai' }))).toBe('wrong-peer')
     const other = createHandshakeHalf({ handleKey: ana.pk, handle: 'ana', serial: 1, inboxId: 'inbox-ana', chainId: CHAIN, carrier: 'qr', now: NOW })
     expect(code(() => verifyHandshakeHalf(b.half, { ...opts, inReplyTo: other.half }))).toBe('wrong-reply')
+    // a reply is never accepted as a fresh first half
+    expect(code(() => verifyHandshakeHalf(b.half, { ...opts, selfHandle: 'ana' }))).toBe('wrong-reply')
   })
 
   it('refuses malformed input without throwing anything else', () => {
@@ -144,6 +146,7 @@ describe('the pairwise secret', () => {
     expect(hexlify(s1)).not.toBe(hexlify(s2))
     expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: p2.a.ephemeralPrivateKey, first: p1.a.half, reply: p1.b.half, chainId: CHAIN }))).toBe('malformed')
     expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: p1.a.ephemeralPrivateKey, first: p1.a.half, reply: p2.b.half, chainId: CHAIN }))).toBe('wrong-reply')
+    expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: p1.b.ephemeralPrivateKey, first: p1.b.half, reply: p1.b.half, chainId: CHAIN }))).toBe('wrong-reply')
   })
 
   it('refuses a low-order X25519 key', () => {
@@ -184,6 +187,23 @@ describe('rename notices', () => {
     expect(code(() => verifyRenameNotice(n, 8453))).toBe('bad-signature')
     expect(code(() => verifyRenameNotice({ ...n, newHandleId: n.oldHandleId }, CHAIN))).toBe('malformed')
     expect(code(() => decodeRenameNotice(JSON.stringify({ ...n, identityStatement: '' })))).toBe('malformed')
+    // one key in both slots is not two signatures
+    expect(
+      code(() =>
+        createRenameNotice({
+          oldHandleKey: ana.pk,
+          newHandleKey: ana.pk,
+          oldHandle: 'ana',
+          oldSerial: 1,
+          newHandle: 'ana-luz',
+          newSerial: 1,
+          identityStatement: 'plane-statement',
+          chainId: CHAIN,
+          now: NOW,
+        }),
+      ),
+    ).toBe('malformed')
+    expect(code(() => decodeRenameNotice(JSON.stringify({ ...n, newOwner: n.oldOwner, newSignature: n.oldSignature })))).toBe('malformed')
   })
 })
 

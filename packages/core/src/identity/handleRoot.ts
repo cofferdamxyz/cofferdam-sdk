@@ -186,7 +186,12 @@ export function deriveSelfEphemeralKey(selfDerivationSeed: Uint8Array, slot: num
   info.set(label, 0)
   info[label.length] = slot
   new DataView(info.buffer).setUint32(label.length + 1, index, false)
-  return secp256k1KeyFromMaterial(labelled(selfDerivationSeed, info))
+  const material = labelled(selfDerivationSeed, info)
+  try {
+    return secp256k1KeyFromMaterial(material)
+  } finally {
+    material.fill(0)
+  }
 }
 
 /** A self-derived one-time address. */
