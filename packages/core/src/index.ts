@@ -216,7 +216,6 @@ export {
   StealthError,
   STEALTH_SCHEME_ID,
   META_ADDRESS_BYTES,
-  FIXTURE_ONE_TIME_FACTORY,
   type StealthMetaAddress,
   type OneTimeAccountFactory,
   type GeneratedStealthAddress,

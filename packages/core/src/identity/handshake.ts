@@ -248,7 +248,7 @@ export interface HandshakeHalfCheck {
  * Without an anchor the half is `unchecked`, and the caller checks it again
  * with `checkHandshakeSigner` when the phone is next online.
  *
- * @param opts.isReplay - Whether this nonce was seen before; the caller
+ * @param opts.isReplay - Required: whether this nonce was seen before; the caller
  *   records it once the half is accepted.
  * @param opts.selfHandle - The verifier's own handle: a half naming another peer is refused.
  * @param opts.inReplyTo - For a reply, the first half it must answer.
@@ -260,7 +260,7 @@ export function verifyHandshakeHalf(
     chainId: number
     now?: number | undefined
     anchor?: HandshakeAnchorView | null | undefined
-    isReplay?: ((nonce: string) => boolean) | undefined
+    isReplay: (nonce: string) => boolean
     selfHandle?: string | undefined
     inReplyTo?: HandshakeHalf | undefined
     /** The carrier it arrived by: a `qr` half may live 10 minutes at most. */
@@ -295,7 +295,7 @@ export function verifyHandshakeHalf(
       throw new HandshakeError('wrong-reply', 'handshake: a handle cannot answer itself')
     }
   }
-  if (opts.isReplay?.(half.nonce)) throw new HandshakeError('replayed', 'handshake: the nonce was seen before')
+  if (opts.isReplay(half.nonce)) throw new HandshakeError('replayed', 'handshake: the nonce was seen before')
   if (!opts.anchor) return { status: 'unchecked', signer, digest }
   checkHandshakeSigner(half, signer, opts.anchor)
   return { status: 'checked', signer, digest }
@@ -341,7 +341,13 @@ export function deriveHandshakeSecret(input: {
   if (own === first.ephemeralKey) peer = reply.ephemeralKey
   else if (own === reply.ephemeralKey) peer = first.ephemeralKey
   else throw new HandshakeError('malformed', 'handshake: the private key is neither half’s')
-  const shared = x25519.getSharedSecret(input.ephemeralPrivateKey, getBytes(peer))
+  let shared: Uint8Array
+  try {
+    shared = x25519.getSharedSecret(input.ephemeralPrivateKey, getBytes(peer))
+  } catch {
+    // noble refuses a low-order point itself
+    throw new HandshakeError('malformed', 'handshake: a low-order X25519 key')
+  }
   if (shared.every((b) => b === 0)) throw new HandshakeError('malformed', 'handshake: a low-order X25519 key')
   const [a, b] = [getBytes(first.handleId), getBytes(reply.handleId)].sort(compareBytes)
   // ASSUMPTION(0086 rule 8): "the hash of both halves" is keccak256 of the

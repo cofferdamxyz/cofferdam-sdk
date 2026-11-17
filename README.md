@@ -134,7 +134,7 @@ The keys and codecs of Cofferdam decision 0086 (accepted 2026-11-15; its questio
 ```ts
 import {
   toHandle, handleId, phraseSeed, deriveHandleEpochKeys, generateStealthAddress, scanAnnouncement,
-  FIXTURE_ONE_TIME_FACTORY, handleAnchorDomain, signHandleTypedData, createHandshakeHalf, verifyHandshakeHalf,
+  handleAnchorDomain, signHandleTypedData, createHandshakeHalf, verifyHandshakeHalf,
 } from '@cofferdam/sdk'
 
 const label = toHandle('@Ana')                          // 'ana': ENS label rules, ENSIP-15, 3 to 64 characters
@@ -142,10 +142,10 @@ const id = handleId(label!)                            // keccak256("cofferdam-h
 const keys = deriveHandleEpochKeys(phraseSeed(phrase), 0) // handle key, stealth keys, meta-address, self seed of epoch 0
 
 // payer: derive a one-time address from the meta-address it checked against the anchor
-const pay = generateStealthAddress(metaAddress, FIXTURE_ONE_TIME_FACTORY) // account, signer, R, view tag, h
+const pay = generateStealthAddress(metaAddress, factory) // account, signer, R, view tag, h; factory from your configuration
 
 // recipient: scan an announcement with the viewing key
-const mine = scanAnnouncement(announcement, { viewingPrivateKey, spendingPublicKey, factory: FIXTURE_ONE_TIME_FACTORY })
+const mine = scanAnnouncement(announcement, { viewingPrivateKey, spendingPublicKey, factory })
 
 // anchor calls and registry requests are EIP-712, signed by the handle key
 const sig = signHandleTypedData(keys.handleKey.privateKey, handleAnchorDomain(84532, anchorAddress), 'Release', { handleId: id, nonce, deadline })
@@ -157,7 +157,7 @@ verifyHandshakeHalf(half, { chainId: 84532, anchor: { owner, serial, frozen, pen
 
 - `rootKeys.ts` gains the seed-level handle keys under their own frozen labels (`HANDLE_SEED_LABELS`): the handle root per epoch, the Tier 1 XMTP key on its own counter, the XMTP recovery identity and a releasing label's release key. Decision 0081's labels are unchanged.
 - `handleRoot.ts`: an epoch's keys, the self-derived ephemeral keys by phone slot (0 to 15) and index with the recovery walk under a gap limit, and the epoch search against the anchor's `owner`.
-- `stealth.ts`: ERC-5564 scheme 1 (66-byte meta-address, spending key first, compressed; `h = keccak256` of the compressed shared point, view tag `h[0]`, `P = S + h·G`), the one-time account as a CREATE2 function of a factory, and the plane's registration check `P = S + h·G` without the viewing key. `FIXTURE_ONE_TIME_FACTORY` is a never-deployed placeholder until the one-time factory of decision 0083 rule 4 exists; pass the real one then.
+- `stealth.ts`: ERC-5564 scheme 1 (66-byte meta-address, spending key first, compressed; `h = keccak256` of the compressed shared point, view tag `h[0]`, `P = S + h·G`), the one-time account as a CREATE2 function of a factory, and the plane's registration check `P = S + h·G` without the viewing key. The SDK ships no factory: the one-time factory of decision 0083 rule 4 does not exist yet, and the shared fixture's placeholder (`stealth.factory`) is never deployed, so an account under it can never be spent from.
 - `handle.ts`: the grammar, `handleId`, and the EIP-712 domains and types of every signed anchor call and registry request.
 - `handshake.ts`: the half and its reply, the pairwise secret (HKDF over X25519), the rename notice and the contact record codec (no address).
 - `packages/core/test/fixtures/handleAnchorTypes.json` is the shared fixture the anchor contract's and the plane's tests read: type strings, typehashes, domain separators, a signature per type from fixed test keys, and stealth vectors. `yarn test` fails when the SDK drifts from it; `WRITE_HANDLE_FIXTURE=1 yarn test handleFixture` rewrites it.

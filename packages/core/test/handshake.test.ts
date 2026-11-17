@@ -28,6 +28,7 @@ const key = () => {
 }
 const ana = key()
 const bia = key()
+const fresh = (): boolean => false
 const anchorOf = (k: { address: string }, serial = 1): HandshakeAnchorView => ({ owner: k.address, serial, frozen: false, pendingChange: false })
 
 function code(fn: () => unknown): string {
@@ -50,19 +51,19 @@ describe('handshake halves', () => {
     const { a, b } = pair()
     const decoded = decodeHandshakeHalf(encodeHandshakeHalf(a.half))
     expect(decoded).toEqual(a.half)
-    const check = verifyHandshakeHalf(decoded, { chainId: CHAIN, now: NOW, anchor: anchorOf(ana), selfHandle: 'bia', carrier: 'qr' })
+    const check = verifyHandshakeHalf(decoded, { chainId: CHAIN, now: NOW, isReplay: fresh, anchor: anchorOf(ana), selfHandle: 'bia', carrier: 'qr' })
     expect(check.status).toBe('checked')
     expect(check.signer).toBe(ana.address)
     expect(b.half.peerHandle).toBe('ana')
     expect(b.half.replyTo).toBe(handshakeHalfDigest(a.half, CHAIN))
-    expect(verifyHandshakeHalf(b.half, { chainId: CHAIN, now: NOW, anchor: anchorOf(bia, 2), selfHandle: 'ana', inReplyTo: a.half }).status).toBe('checked')
+    expect(verifyHandshakeHalf(b.half, { chainId: CHAIN, now: NOW, isReplay: fresh, anchor: anchorOf(bia, 2), selfHandle: 'ana', inReplyTo: a.half }).status).toBe('checked')
     expect(a.half.expiresAt - NOW / 1000).toBe(600)
     expect(b.half.expiresAt - NOW / 1000).toBe(7 * 86400)
   })
 
   it('stays unchecked when scanned offline', () => {
     const { a } = pair()
-    const check = verifyHandshakeHalf(a.half, { chainId: CHAIN, now: NOW })
+    const check = verifyHandshakeHalf(a.half, { chainId: CHAIN, now: NOW, isReplay: fresh })
     expect(check.status).toBe('unchecked')
     expect(check.signer).toBe(ana.address)
   })
@@ -71,20 +72,20 @@ describe('handshake halves', () => {
     const { a } = pair()
     const mallory = key()
     const forged = createHandshakeHalf({ handleKey: mallory.pk, handle: 'ana', serial: 1, inboxId: 'inbox-mallory', chainId: CHAIN, carrier: 'qr', now: NOW })
-    expect(code(() => verifyHandshakeHalf(forged.half, { chainId: CHAIN, now: NOW, anchor: anchorOf(ana) }))).toBe('owner-mismatch')
+    expect(code(() => verifyHandshakeHalf(forged.half, { chainId: CHAIN, now: NOW, isReplay: fresh, anchor: anchorOf(ana) }))).toBe('owner-mismatch')
     const tampered: HandshakeHalf = { ...a.half, inboxId: 'inbox-mallory' }
-    expect(code(() => verifyHandshakeHalf(tampered, { chainId: CHAIN, now: NOW, anchor: anchorOf(ana) }))).toBe('owner-mismatch')
-    const otherChain = verifyHandshakeHalf(a.half, { chainId: 8453, now: NOW })
+    expect(code(() => verifyHandshakeHalf(tampered, { chainId: CHAIN, now: NOW, isReplay: fresh, anchor: anchorOf(ana) }))).toBe('owner-mismatch')
+    const otherChain = verifyHandshakeHalf(a.half, { chainId: 8453, now: NOW, isReplay: fresh })
     expect(otherChain.signer).not.toBe(ana.address)
-    expect(code(() => verifyHandshakeHalf({ ...a.half, handleId: '0x' + '11'.repeat(32) }, { chainId: CHAIN, now: NOW }))).toBe('malformed')
-    expect(code(() => verifyHandshakeHalf({ ...a.half, signature: '0x' + '00'.repeat(65) }, { chainId: CHAIN, now: NOW }))).toBe('bad-signature')
+    expect(code(() => verifyHandshakeHalf({ ...a.half, handleId: '0x' + '11'.repeat(32) }, { chainId: CHAIN, now: NOW, isReplay: fresh }))).toBe('malformed')
+    expect(code(() => verifyHandshakeHalf({ ...a.half, signature: '0x' + '00'.repeat(65) }, { chainId: CHAIN, now: NOW, isReplay: fresh }))).toBe('bad-signature')
   })
 
   it('refuses an expired, overlong or replayed half', () => {
     const { a, b } = pair()
-    expect(code(() => verifyHandshakeHalf(a.half, { chainId: CHAIN, now: NOW + 601_000 }))).toBe('expired')
-    expect(code(() => verifyHandshakeHalf(b.half, { chainId: CHAIN, now: NOW, carrier: 'qr' }))).toBe('lifetime')
-    expect(code(() => verifyHandshakeHalf(b.half, { chainId: CHAIN, now: NOW - 86400_000 }))).toBe('lifetime')
+    expect(code(() => verifyHandshakeHalf(a.half, { chainId: CHAIN, now: NOW + 601_000, isReplay: fresh }))).toBe('expired')
+    expect(code(() => verifyHandshakeHalf(b.half, { chainId: CHAIN, now: NOW, isReplay: fresh, carrier: 'qr' }))).toBe('lifetime')
+    expect(code(() => verifyHandshakeHalf(b.half, { chainId: CHAIN, now: NOW - 86400_000, isReplay: fresh }))).toBe('lifetime')
     const seen = new Set<string>()
     const isReplay = (n: string) => seen.has(n)
     verifyHandshakeHalf(a.half, { chainId: CHAIN, now: NOW, isReplay })
@@ -94,7 +95,7 @@ describe('handshake halves', () => {
 
   it('refuses a frozen record, a pending change, a new serial and the wrong peer or reply', () => {
     const { a, b } = pair()
-    const opts = { chainId: CHAIN, now: NOW }
+    const opts = { chainId: CHAIN, now: NOW, isReplay: fresh }
     expect(code(() => verifyHandshakeHalf(a.half, { ...opts, anchor: { ...anchorOf(ana), frozen: true } }))).toBe('frozen')
     expect(code(() => verifyHandshakeHalf(a.half, { ...opts, anchor: { ...anchorOf(ana), pendingChange: true } }))).toBe('pending-change')
     expect(code(() => verifyHandshakeHalf(a.half, { ...opts, anchor: anchorOf(ana, 2) }))).toBe('serial-mismatch')
@@ -148,7 +149,7 @@ describe('the pairwise secret', () => {
   it('refuses a low-order X25519 key', () => {
     const { a, b } = pair()
     const zero = { ...b.half, ephemeralKey: '0x' + '00'.repeat(32) }
-    expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: a.ephemeralPrivateKey, first: a.half, reply: zero, chainId: CHAIN }))).not.toBe('none')
+    expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: a.ephemeralPrivateKey, first: a.half, reply: zero, chainId: CHAIN }))).toBe('malformed')
   })
 })
 

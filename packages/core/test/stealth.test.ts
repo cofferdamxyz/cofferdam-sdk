@@ -4,7 +4,6 @@ import {
   computeStealthPrivateKey,
   decodeMetaAddress,
   encodeMetaAddress,
-  FIXTURE_ONE_TIME_FACTORY,
   generateStealthAddress,
   META_ADDRESS_BYTES,
   oneTimeAccountAddress,
@@ -13,6 +12,7 @@ import {
   stealthSignerFromHash,
   verifyStealthRegistration,
 } from '../src/index.js'
+import { FIXTURE_ONE_TIME_FACTORY } from './fixtures/oneTimeFactory.js'
 
 // No published ERC-5564 test vectors exist (searched 2026-11-17). The
 // reference implementation (ScopeLift's stealth-address-sdk) hashes noble's

@@ -134,6 +134,17 @@ describe('EIP-712 types', () => {
     expect(() => handleTypedDataDigest(anchor, 'ReleaseHandle', { handleId: msg.handleId, serial: 1, nonce: '0x' + '00'.repeat(32), expiresAt: 1 })).toThrow(
       'CofferdamHandleRegistry domain',
     )
+    expect(() => handleTypedDataDigest({ ...anchor, version: '2' }, 'Release', msg)).toThrow('version 1')
+    expect(() => handleTypedDataDigest({ ...anchor, verifyingContract: null }, 'Release', msg)).toThrow('names verifyingContract')
+    expect(() => handleTypedDataDigest({ ...anchor, chainId: null }, 'Release', msg)).toThrow('names a chain')
+    expect(() =>
+      handleTypedDataDigest({ ...registry, verifyingContract: '0x' + '12'.repeat(20) }, 'ReleaseHandle', {
+        handleId: msg.handleId,
+        serial: 1,
+        nonce: '0x' + '00'.repeat(32),
+        expiresAt: 1,
+      }),
+    ).toThrow('names no verifyingContract')
     expect(() => handleTypedDataDigest(anchor, 'Nope' as any, msg)).toThrow('unknown primary type')
     expect(() => handleTypedDataDigest(anchor, 'toString' as any, msg)).toThrow('unknown primary type')
   })

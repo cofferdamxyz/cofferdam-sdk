@@ -14,7 +14,6 @@ import {
   deriveXmtpRecoveryIdentity,
   deriveXmtpRecoveryKeyMaterial,
   findHandleEpoch,
-  FIXTURE_ONE_TIME_FACTORY,
   HANDLE_ROOT_LABELS,
   HANDLE_SEED_LABELS,
   phraseSeed,
@@ -22,6 +21,7 @@ import {
   scanAnnouncement,
   walkSelfDerivedAddresses,
 } from '../src/index.js'
+import { FIXTURE_ONE_TIME_FACTORY } from './fixtures/oneTimeFactory.js'
 
 // BIP-39's all-zero 24-word phrase, as rootKeys.test.ts. The expected hex was
 // computed outside this code (Python hmac/hashlib HKDF-SHA256, the reduction

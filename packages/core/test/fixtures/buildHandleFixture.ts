@@ -25,7 +25,6 @@ import {
   deriveHandleEpochKeys,
   deriveSelfAddress,
   deriveSelfEphemeralKey,
-  FIXTURE_ONE_TIME_FACTORY,
   generateStealthAddress,
   HANDLE_ANCHOR_TYPES,
   HANDLE_REGISTRY_TYPES,
@@ -42,6 +41,7 @@ import {
   type HandlePrimaryType,
   type HandleRegistryPrimaryType,
 } from '../../src/index.js'
+import { FIXTURE_ONE_TIME_FACTORY } from './oneTimeFactory.js'
 
 export const FIXTURE_PHRASE = [...Array(23).fill('abandon'), 'art'].join(' ')
 export const FIXTURE_CHAIN_ID = 84532

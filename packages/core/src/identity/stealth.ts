@@ -13,15 +13,15 @@
 // An announcement names the one-time account, not its signer (0086 rule 5):
 // the account is the counterfactual address a factory gives the signer
 // (decision 0083 rule 4). That factory is not designed yet, so the address
-// is a function of a factory description the caller passes, and
-// FIXTURE_ONE_TIME_FACTORY is the agreed placeholder the SDK, the plane and
-// the anchor fixture use until it exists.
+// is a function of a factory description the caller passes, from its
+// configuration. The shared fixture's placeholder factory is never deployed:
+// an account under it can never be spent from.
 //
 // Synchronous and pure; hashing is @noble/hashes, the curve @noble/curves.
 
 import { secp256k1 } from '@noble/curves/secp256k1'
 import { keccak_256 } from '@noble/hashes/sha3'
-import { randomBytes, utf8ToBytes } from '@noble/hashes/utils'
+import { randomBytes } from '@noble/hashes/utils'
 import { getAddress, getCreate2Address, hexlify, zeroPadValue } from 'ethers'
 
 /** ERC-5564 scheme id of secp256k1 with view tags, the only scheme Cofferdam uses. */
@@ -62,19 +62,11 @@ export interface OneTimeAccountFactory {
 }
 
 // ASSUMPTION(0086 Ruling A): one-time accounts come from decision 0083 rule
-// 4's factory, which does not exist yet. Until it does, this placeholder
-// CREATE2 formula stands in for it. It is never deployed: both values are
-// hashes of fixed strings. The real factory replaces it as a caller value.
-/**
- * The placeholder one-time account factory (never deployed): the address and
- * the init code hash are keccak256 of fixed strings. The SDK's tests, the
- * shared anchor fixture and the plane's `self` route use it until decision
- * 0083 rule 4's factory exists; pass the real one then.
- */
-export const FIXTURE_ONE_TIME_FACTORY: Readonly<OneTimeAccountFactory> = Object.freeze({
-  address: getAddress(hexlify(keccak_256(utf8ToBytes('cofferdam-fixture-one-time-factory-v0')).slice(12))),
-  initCodeHash: hexlify(keccak_256(utf8ToBytes('cofferdam-fixture-one-time-account-v0'))),
-})
+// 4's factory, which does not exist yet. The account address is therefore a
+// function of a factory the caller passes; the SDK ships no factory address.
+// The tests and the shared fixture use a never-deployed placeholder
+// (`test/fixtures/oneTimeFactory.ts`, and `stealth.factory` in
+// `handleAnchorTypes.json` for the plane and the contract).
 
 function bytesToBigInt(bytes: Uint8Array): bigint {
   let n = 0n
@@ -217,7 +209,7 @@ export function stealthSignerFromHash(spendingPublicKey: Uint8Array, sharedSecre
  * left-padded to 32 bytes as the salt). The address an announcement names.
  *
  * @param signer - The stealth signer's address.
- * @param factory - The factory; `FIXTURE_ONE_TIME_FACTORY` until decision 0083 rule 4's exists.
+ * @param factory - The factory, from the caller's configuration (decision 0083 rule 4).
  * @returns The account's checksummed address.
  */
 export function oneTimeAccountAddress(signer: string, factory: OneTimeAccountFactory): string {

@@ -248,8 +248,15 @@ function fieldsOf(primaryType: HandlePrimaryType): TypedDataField[] {
 
 function checkDomain(domain: TypedDataDomain, primaryType: HandlePrimaryType): void {
   fieldsOf(primaryType)
-  const want = own(HANDLE_ANCHOR_TYPES, primaryType) ? HANDLE_ANCHOR_DOMAIN_NAME : HANDLE_REGISTRY_DOMAIN_NAME
+  const anchor = own(HANDLE_ANCHOR_TYPES, primaryType)
+  const want = anchor ? HANDLE_ANCHOR_DOMAIN_NAME : HANDLE_REGISTRY_DOMAIN_NAME
   if (domain.name !== want) throw new Error(`handle: ${primaryType} is signed in the ${want} domain`)
+  if (domain.version !== HANDLE_DOMAIN_VERSION) throw new Error(`handle: the ${want} domain is version ${HANDLE_DOMAIN_VERSION}`)
+  if (domain.chainId == null) throw new Error(`handle: the ${want} domain names a chain`)
+  if (anchor !== (domain.verifyingContract != null)) {
+    throw new Error(`handle: the ${want} domain ${anchor ? 'names' : 'names no'} verifyingContract`)
+  }
+  if (domain.salt != null) throw new Error(`handle: the ${want} domain has no salt`)
 }
 
 function typesFor(primaryType: HandlePrimaryType, message: HandleTypedMessage): Record<string, TypedDataField[]> {
