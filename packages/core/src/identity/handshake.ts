@@ -251,7 +251,8 @@ export interface HandshakeHalfCheck {
  * @param opts.isReplay - Required: whether this nonce was seen before; the caller
  *   records it once the half is accepted.
  * @param opts.selfHandle - The verifier's own handle: a half naming another peer is refused.
- * @param opts.inReplyTo - For a reply, the first half it must answer.
+ * @param opts.inReplyTo - For a reply, the first half it must answer (itself no reply). A reply
+ *   checked without it is refused (`wrong-reply`): it is never taken for a new first half.
  * @throws HandshakeError
  */
 export function verifyHandshakeHalf(
@@ -290,6 +291,7 @@ export function verifyHandshakeHalf(
   if (opts.inReplyTo === undefined) {
     if (half.replyTo !== null) throw new HandshakeError('wrong-reply', 'handshake: a reply checked as a first half')
   } else {
+    if (opts.inReplyTo.replyTo !== null) throw new HandshakeError('wrong-reply', 'handshake: the half answered is itself a reply')
     if (half.replyTo !== handshakeHalfDigest(opts.inReplyTo, opts.chainId)) {
       throw new HandshakeError('wrong-reply', 'handshake: the reply does not answer this half')
     }

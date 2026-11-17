@@ -146,7 +146,11 @@ describe('the pairwise secret', () => {
     expect(hexlify(s1)).not.toBe(hexlify(s2))
     expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: p2.a.ephemeralPrivateKey, first: p1.a.half, reply: p1.b.half, chainId: CHAIN }))).toBe('malformed')
     expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: p1.a.ephemeralPrivateKey, first: p1.a.half, reply: p2.b.half, chainId: CHAIN }))).toBe('wrong-reply')
-    expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: p1.b.ephemeralPrivateKey, first: p1.b.half, reply: p1.b.half, chainId: CHAIN }))).toBe('wrong-reply')
+    const cai = key()
+    const c = createHandshakeReply(p1.b.half, { handleKey: cai.pk, handle: 'cai', serial: 1, inboxId: 'inbox-cai', chainId: CHAIN, carrier: 'link', now: NOW })
+    // only the first-half guard refuses this pair: c really answers b
+    expect(code(() => deriveHandshakeSecret({ ephemeralPrivateKey: c.ephemeralPrivateKey, first: p1.b.half, reply: c.half, chainId: CHAIN }))).toBe('wrong-reply')
+    expect(code(() => verifyHandshakeHalf(c.half, { chainId: CHAIN, now: NOW, isReplay: fresh, inReplyTo: p1.b.half }))).toBe('wrong-reply')
   })
 
   it('refuses a low-order X25519 key', () => {
