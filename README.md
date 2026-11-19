@@ -67,6 +67,8 @@ await provider.ensureDeployed()                    // first sponsored op carries
 await provider.sendTransaction({ to, data })       // execute(to, value, data), signed and relayed
 ```
 
+`sendTransaction` resolves only when the operation itself succeeded. EntryPoint v0.7 catches a revert inside the account's call, so a mined transaction is not enough: the SDK reads the operation's `UserOperationEvent.success` and throws `UserOperationFailedError` (`reason` `reverted` with the raw `revertData`, `not_executed`, or `unknown` when no receipt comes in time) whatever the relay answered. A relay refusal is a `UserOpRelayError`: `identity_check_failed` (the identity registry refused, on the mainnet test lane) and `execution_reverted` (the call would revert) send nothing and name the error; `user_op_reverted` is mined and reverted, with `txHash`; `preflight_unavailable`, `fee_too_low`, `pre_verification_gas_too_low` and the rest are listed on the class. The provider sends its `chainId` with each operation so the plane picks the lane. `preVerificationGas` is `0n` unless configured: `preVerificationGas: 'l1-fee'` estimates it from Base's GasPriceOracle so an unsponsored operation repays the bundle's L1 data fee, and prices the operation at ethers' `maxFeePerGas` (twice the base fee plus the tip) when `eth_gasPrice` is lower.
+
 Device management on the same provider: `listAuthorities()` (each record carries its tier, including `partner`, and a High's `probationEndsAt` in unix seconds, or `null`), `addBackupPasskey(publicKey)` (up to 3 passkeys), `revokeAuthority(id)` (the last passkey cannot be revoked), `resolveOwnAuthorityId()`. `createDeviceHandoff` and `decodeAndVerifyDeviceHandoff` encode and check the `cdh1:` QR a new device shows to an existing one. Passing `handoverKey` (the new device's X25519 public key, 0x-hex, which needs the invitation `challenge`) makes a version 2 handoff: its digest has its own domain and commits to both, so the existing device can seal the account's root keys to that key once the passkey is added (workspace decision 0081). Version 1 tokens still decode and verify; an SDK older than version 2 refuses a version 2 token.
 
 Contract addresses are configuration; the SDK holds no address table. The Base Sepolia deployment is in [`cofferdamxyz/base-contracts`](https://github.com/cofferdamxyz/base-contracts) under `deployments/baseSepolia.json`.
@@ -162,6 +164,24 @@ verifyHandshakeHalf(half, { chainId: 84532, anchor: { owner, serial, frozen, pen
 - `handshake.ts`: the half and its reply, the pairwise secret (HKDF over X25519), the rename notice and the contact record codec (no address).
 - `packages/core/test/fixtures/handleAnchorTypes.json` is the shared fixture the anchor contract's and the plane's tests read: type strings, typehashes, domain separators, a signature per type from fixed test keys, and stealth vectors. `yarn test` fails when the SDK drifts from it; `WRITE_HANDLE_FIXTURE=1 yarn test handleFixture` rewrites it.
 
+## Identity registry (passport binding)
+
+`CofferdamIdentityRegistry` binds one person's identifier to one account; the person proves it with ZKPassport through `ZKPassportEvidenceAdapter` (Cofferdam decision 0080). The account itself calls the registry, and every proof is bound to a digest the registry hands out for the account's next action.
+
+```ts
+import { CofferdamIdentityRegistryClient, zkpEvidenceFromParams, encodeBindCall } from '@cofferdam/sdk'
+
+const registry = new CofferdamIdentityRegistryClient({ address: identityRegistry, runner: rpcProvider })
+const customData = await registry.customData('bind', account) // the ZKPassport request's custom_data
+// ...ZKPassport proves bind(user_address = account, chain = base, custom_data), age >= 18, an expiry bound...
+const evidence = zkpEvidenceFromParams(solidityVerifierParameters)
+await registry.check('bind', account, adapter, evidence)       // eth_call pre-flight; IdentityRegistryError names the refusal
+await provider.sendTransaction({ to: identityRegistry, data: encodeBindCall(adapter, evidence) })
+await registry.isAccountBound(account)                         // true
+```
+
+`identityDigest` and `zkpCustomData` compute the digest off-chain; `identityRevertName` names a registry or adapter revert, such as `UserOperationFailedError.revertData`. The identifier `check` returns, and the errors' arguments, name the passport: never log, store or send them. `check` throws `IdentityRegistryError` only for a revert; a call that could not run (a node error) throws a plain `Error` that carries no part of the request. The SDK has no ZKPassport dependency; it takes the parameters ZKPassport's own SDK returns.
+
 ## Escrow
 
 ```ts
@@ -207,6 +227,7 @@ Profiles: `verified-br`, `verified-us`, `unverified`, `ofac-flagged`, `stale-pro
 | Area | Status |
 |---|---|
 | Passkey account: address derivation, sponsored relayed operations, first-op deployment | ✅ Built, used by the Cofferdam app on Base Sepolia |
+| Identity registry (decision 0080): digest, `custom_data` and ZKPassport evidence encoders, registry reads and pre-flight, bind calldata; per-operation success check; L1-fee `preVerificationGas` | ✅ Built, not yet run against a deployed registry from the app |
 | Passkey devices: list, add (up to 3), revoke, device-handoff QR codec (versions 1 and 2, the second with the handover key) | ✅ Built |
 | `csa1:` session attestation: create and verify | ✅ Built (versions 1 and 2) |
 | Root keys from the 24-word recovery phrase: the Vault, messaging and recovery keys, the PRF envelope key, the passport secret on its existing path | ✅ Built |

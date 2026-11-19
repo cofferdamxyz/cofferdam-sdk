@@ -79,16 +79,63 @@ export function buildInitCode(
   ])
 }
 
-/** The plane refused or failed to relay the op. `code` is its error id. */
+/**
+ * The plane refused or failed to relay the op. `code` is its error id; the
+ * ones a caller acts on (cofferdam-api `routes/aa.ts`). A message that names
+ * a revert names the error only (`WrongBoundDigest`, `IdentifierAlreadyBound`),
+ * never its arguments.
+ *   - `identity_check_failed` (400): on the mainnet test lane, the identity
+ *     registry's `check` refused the bind, relink or rebind; nothing was sent.
+ *   - `execution_reverted` (400): the pre-flight found that the op's own call
+ *     would revert; nothing was sent.
+ *   - `user_op_reverted` (422): mined, and the op's call reverted; `txHash` is set.
+ *   - `simulation_failed` (400): validation failed (`AAxx`); nothing was sent.
+ *   - `fee_too_low`, `pre_verification_gas_too_low` (400): the mainnet test
+ *     lane's fee floor and L1-fee floor (`preVerificationGas: 'l1-fee'` meets them).
+ *   - `chain_unsupported` (400), `not_test_account` (403): the lane is off, or
+ *     the account is not on its allowlist.
+ *   - `preflight_unavailable` (503): the plane's node cannot pre-flight; nothing
+ *     was sent.
+ *   - `rate_limited` (429): nothing was sent; retry later.
+ *   - `relay_failed` (502): the plane could not confirm its send, which the
+ *     node may still have taken. `NativeAccountProvider.sendTransaction` looks
+ *     the op up (as it does when the connection drops before an answer) and
+ *     answers its receipt, its revert, or `UserOperationFailedError('unknown')`;
+ *     re-read before any retry.
+ */
 export class UserOpRelayError extends Error {
   constructor(
     readonly code: string,
     message: string,
     readonly status: number,
+    /** The mined transaction, for `user_op_reverted`. */
+    readonly txHash: string | null = null,
   ) {
     super(`[cofferdam-sdk] relay ${code}: ${message}`)
     this.name = 'UserOpRelayError'
   }
+}
+
+/**
+ * Whether a refusal may follow a send the node took: a 5xx other than
+ * `preflight_unavailable` (503, whose pre-flight sent nothing).
+ */
+export function mayHaveBeenSent(err: UserOpRelayError): boolean {
+  return err.status >= 500 && err.code !== 'preflight_unavailable'
+}
+
+/**
+ * What the plane saw of the op's receipt within its wait: `success` (the op's
+ * own event said so), `pending` (no receipt in time) or `unknown` (`handleOps`
+ * reverted in this transaction; a resend may have carried the op earlier).
+ * Absent from planes before decision 0080's relay. The client checks the op's
+ * own event whatever this says (`confirmUserOperation`).
+ */
+export type RelayReceiptState = 'success' | 'pending' | 'unknown'
+
+export interface RelayUserOperationResult {
+  txHash: string
+  receipt: RelayReceiptState | null
 }
 
 export interface RelayUserOperationOptions {
@@ -97,26 +144,47 @@ export interface RelayUserOperationOptions {
   userOp: PackedUserOperation
   /** EntryPoint the op was hashed against; the plane refuses any other. */
   entryPoint: string
+  /**
+   * The op's chain. The plane picks the lane from it and takes Base Sepolia
+   * when it is absent; Base mainnet (8453) reaches only the test relay of
+   * decision 0080 M2, off unless the plane enables it.
+   */
+  chainId?: number | undefined
   fetchImpl?: typeof fetch | undefined
 }
 
-/** POST the signed op to the plane; resolves with the `handleOps` tx hash. */
-export async function relayUserOperation(opts: RelayUserOperationOptions): Promise<{ txHash: string }> {
+/**
+ * POST the signed op to the plane; resolves with the `handleOps` tx hash once
+ * the plane accepted it (`202`). Acceptance is not success: confirm the op
+ * with `confirmUserOperation`, as `NativeAccountProvider.sendTransaction` does.
+ */
+export async function relayUserOperation(opts: RelayUserOperationOptions): Promise<RelayUserOperationResult> {
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = opts.relayerUrl.replace(/\/+$/, '') + USER_OPERATION_PATH
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ entryPoint: opts.entryPoint, userOp: serializeUserOperation(opts.userOp) }),
+    body: JSON.stringify({
+      entryPoint: opts.entryPoint,
+      ...(opts.chainId !== undefined ? { chainId: opts.chainId } : {}),
+      userOp: serializeUserOperation(opts.userOp),
+    }),
   })
   const body = (await res.json().catch(() => ({}))) as {
     ok?: boolean
     txHash?: string
     error?: string
     message?: string
+    receipt?: string
   }
   if (!res.ok || !body.ok || !body.txHash) {
-    throw new UserOpRelayError(body.error ?? `http_${res.status}`, body.message ?? `relayer answered ${res.status}`, res.status)
+    throw new UserOpRelayError(
+      body.error ?? `http_${res.status}`,
+      body.message ?? `relayer answered ${res.status}`,
+      res.status,
+      typeof body.txHash === 'string' ? body.txHash : null,
+    )
   }
-  return { txHash: body.txHash }
+  const receipt = body.receipt === 'success' || body.receipt === 'pending' || body.receipt === 'unknown' ? body.receipt : null
+  return { txHash: body.txHash, receipt }
 }

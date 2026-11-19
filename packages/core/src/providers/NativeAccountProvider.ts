@@ -32,7 +32,10 @@
 //      issue them yet).
 //
 // `sendTransaction()` builds an ERC-4337 PackedUserOperation, signs the
-// userOpHash with the passkey, and submits via `EntryPoint.handleOps()`.
+// userOpHash with the passkey, and submits via `EntryPoint.handleOps()`. It
+// resolves only when the op's own `UserOperationEvent.success` is true
+// (decision 0080 (3)): a mined `handleOps` whose op reverted throws
+// `UserOperationFailedError`, and so does a receipt that cannot be read.
 //
 // Signature format: `solidityPacked(uint256 authorityId, bytes innerSignature)`
 // where `innerSignature` is the raw 64-byte P-256 `r || s` from the passkey
@@ -94,7 +97,9 @@ import {
 import { jwkThumbprint } from '../identity/deviceKey.js'
 import { SignInRejected } from './MockProvider.js'
 import { NO_PERMISSION, PERMISSION_TUPLE, type Permission } from './permission.js'
-import { buildInitCode, relayUserOperation, type PackedUserOperation } from './userOpRelay.js'
+import { buildInitCode, mayHaveBeenSent, relayUserOperation, UserOpRelayError, type PackedUserOperation } from './userOpRelay.js'
+import { confirmUserOperation, findUserOperation } from './userOpOutcome.js'
+import { estimateL1PreVerificationGas, standInSignature } from './preVerificationGas.js'
 import type {
   AuthorityDescriptor,
   AuthorityKind,
@@ -357,6 +362,18 @@ export interface NativeAccountProviderConfig {
   /** Gas limit for AA txs when estimation is skipped/fails. Default 20_000_000. */
   defaultGasLimit?: bigint
 
+  /**
+   * The op's `preVerificationGas`. Default `0n`, which the sponsored Base
+   * Sepolia relay accepts. `'l1-fee'` estimates it from Base's GasPriceOracle so
+   * the op repays the bundle's L1 data fee, as the plane's unsponsored mainnet
+   * test relay requires (`preVerificationGas.ts`); it needs an OP Stack chain
+   * (Base, Base Sepolia or a fork). A bigint is sent as is.
+   */
+  preVerificationGas?: bigint | 'l1-fee' | undefined
+
+  /** How long to wait for a relayed op's receipt before `UserOperationFailedError('unknown')`. Default 120 s. */
+  receiptTimeoutMs?: number | undefined
+
   latencyMs?: number
 }
 
@@ -380,6 +397,8 @@ interface ResolvedConfig {
   authorityId: number
   autoDeploy: boolean
   defaultGasLimit: bigint
+  preVerificationGas: bigint | 'l1-fee'
+  receiptTimeoutMs: number | undefined
   latencyMs: number
   genesis: GenesisAuthorityConfig
   genesisPermission: Permission
@@ -439,6 +458,8 @@ export class NativeAccountProvider implements CofferdamProvider {
       authorityId: config.authorityId ?? 0,
       autoDeploy: config.autoDeploy ?? false,
       defaultGasLimit: config.defaultGasLimit ?? 20_000_000n,
+      preVerificationGas: config.preVerificationGas ?? 0n,
+      receiptTimeoutMs: config.receiptTimeoutMs,
       latencyMs: config.latencyMs ?? 0,
       genesis,
       genesisPermission: config.genesisPermission ?? NO_PERMISSION,
@@ -658,12 +679,50 @@ export class NativeAccountProvider implements CofferdamProvider {
   // ── Transactions ───────────────────────────────────────────────────────────
 
   /**
+   * Whether the account can pay for an unsponsored op (decision 0080's mainnet
+   * test lane, where `paymasterAndData` is empty and the account prefunds the
+   * EntryPoint itself): `required` is the most the EntryPoint takes before
+   * running it, (verification + call + preVerificationGas) × the price
+   * `sendTransaction` would sign now, with the deploy's verification gas while
+   * the account is counterfactual; `available` is the account's balance plus
+   * its EntryPoint deposit. With `'l1-fee'` the op's preVerificationGas is
+   * known only once the op is built, so `preVerificationGasAllowance` stands in
+   * for it. A read, never a send: the price moves before the op is signed.
+   */
+  async prefundCheck(
+    opts: { gasLimit?: bigint; preVerificationGasAllowance?: bigint } = {},
+  ): Promise<PrefundCheck> {
+    const account = await this.getAccountAddress()
+    const entryPoint = new EthContract(this.config.contracts.entryPoint, ENTRY_POINT_ABI as unknown as string[], this.chainProvider)
+    const [code, feeData, balance, deposit] = await Promise.all([
+      this.chainProvider.getCode(account),
+      this.chainProvider.getFeeData(),
+      this.chainProvider.getBalance(account),
+      entryPoint.balanceOf(account) as Promise<bigint>,
+    ])
+    const deployed = code !== undefined && code !== null && code !== '0x'
+    const pvgSetting = this.config.preVerificationGas
+    const price = pvgSetting === 'l1-fee' ? l1LaneGasPrice(feeData) : (feeData.gasPrice ?? 1_000_000_000n)
+    const callGasLimit = opts.gasLimit ?? this.config.defaultGasLimit
+    const verificationGasLimit = deployed ? callGasLimit : callGasLimit + DEPLOY_VERIFICATION_GAS
+    const pvg = pvgSetting === 'l1-fee' ? (opts.preVerificationGasAllowance ?? L1_PVG_ALLOWANCE) : pvgSetting
+    const required = (verificationGasLimit + callGasLimit + pvg) * price
+    return { account, deployed, required, available: balance + deposit }
+  }
+
+  /**
    * Submit an ERC-4337 UserOperation from the smart account, signed by the
    * passkey authority and, by default, sponsored by the paymaster. The UserOp's
    * callData encodes `account.execute(target, value, data)`, which the EntryPoint
    * calls after `validateUserOp` succeeds. A not-yet-deployed account is
    * created by this op: with `relayerUrl` the op carries `initCode`; with the
    * PoC deployer key the factory is called first.
+   *
+   * Resolves with the receipt of the transaction that ran the op, only once the
+   * op's `UserOperationEvent.success` is true. Throws `UserOpRelayError` when
+   * the plane refuses (`execution_reverted`: nothing sent; `user_op_reverted`:
+   * mined and reverted) and `UserOperationFailedError` when the op reverted,
+   * did not run, or its receipt cannot be read in time (`unknown`).
    */
   async sendTransaction(req: NativeTxRequest): Promise<TransactionReceipt> {
     const accountAddress = await this.getAccountAddress()
@@ -710,11 +769,14 @@ export class NativeAccountProvider implements CofferdamProvider {
 
     // ── Pack gas fields for ERC-4337 v0.7 ─────────────────────────────────
     const feeData = await this.chainProvider.getFeeData()
-    const gasPrice = feeData.gasPrice ?? 1_000_000_000n
+    const pvgSetting = this.config.preVerificationGas
+    const gasPrice = pvgSetting === 'l1-fee' ? l1LaneGasPrice(feeData) : (feeData.gasPrice ?? 1_000_000_000n)
     const callGasLimit = req.gasLimit ?? this.config.defaultGasLimit
     const verificationGasLimit = initCode === '0x' ? callGasLimit : callGasLimit + DEPLOY_VERIFICATION_GAS
     const accountGasLimits = packGasLimits(verificationGasLimit, callGasLimit)
     const gasFees = packGasFees(gasPrice, gasPrice) // priority = base for simplicity
+
+    const authorityId = req.authorityId ?? this.config.authorityId
 
     // ── Build the PackedUserOperation ─────────────────────────────────────
     const userOp: PackedUserOperation = {
@@ -723,7 +785,7 @@ export class NativeAccountProvider implements CofferdamProvider {
       initCode,
       callData: executeData,
       accountGasLimits,
-      preVerificationGas: 0n,
+      preVerificationGas: pvgSetting === 'l1-fee' ? 0n : pvgSetting,
       gasFees,
       paymasterAndData:
         usePaymaster && paymaster
@@ -735,11 +797,22 @@ export class NativeAccountProvider implements CofferdamProvider {
       signature: '0x', // placeholder — set after hashing
     }
 
+    // ── preVerificationGas for the L1 data fee, before the hash is signed ──
+    if (pvgSetting === 'l1-fee') {
+      userOp.preVerificationGas = await estimateL1PreVerificationGas({
+        runner: this.chainProvider,
+        chainId: this.config.chainId,
+        entryPoint: this.config.contracts.entryPoint,
+        // A large stand-in value, so its word in the calldata is as non-zero as the real one.
+        userOp: { ...userOp, preVerificationGas: (1n << 32n) - 1n, signature: standInSignature(authorityId) },
+        maxFeePerGas: gasPrice,
+      })
+    }
+
     // ── Get the userOpHash from the EntryPoint ────────────────────────────
     const userOpHash = await (entryPoint.getUserOpHash(userOp) as Promise<string>)
 
     // ── Sign the hash with the genesis authority (prefixed with authorityId) ──
-    const authorityId = req.authorityId ?? this.config.authorityId
     const innerSignature = await this.signInner(accountAddress, userOpHash)
     const signature = solidityPacked(['uint256', 'bytes'], [authorityId, innerSignature])
 
@@ -747,17 +820,40 @@ export class NativeAccountProvider implements CofferdamProvider {
     const finalUserOp: PackedUserOperation = { ...userOp, signature }
 
     // Production: the plane's relayer bundles the op (and is refunded by the
-    // paymaster); the client only waits for the receipt.
+    // paymaster). Its 202 says only that the op was sent: whatever its
+    // `receipt` field says, the op's own event decides (decision 0080 (3)).
     if (this.config.relayerUrl) {
-      const { txHash } = await relayUserOperation({
-        relayerUrl: this.config.relayerUrl,
-        userOp: finalUserOp,
+      let txHash: string
+      try {
+        ;({ txHash } = await relayUserOperation({
+          relayerUrl: this.config.relayerUrl,
+          userOp: finalUserOp,
+          entryPoint: this.config.contracts.entryPoint,
+          chainId: this.config.chainId,
+          fetchImpl: this.config.fetchImpl,
+        }))
+      } catch (err) {
+        // A 5xx after the pre-flights (`relay_failed`), or a connection that
+        // dropped before the plane answered (fetch's `TypeError`), can follow a
+        // send the node accepted: look the op up before reporting a failure.
+        if ((err instanceof UserOpRelayError && mayHaveBeenSent(err)) || err instanceof TypeError) {
+          return findUserOperation({
+            provider: this.chainProvider,
+            entryPoint: this.config.contracts.entryPoint,
+            userOpHash,
+            txHash: err instanceof UserOpRelayError ? (err.txHash ?? '') : '',
+            timeoutMs: this.config.receiptTimeoutMs,
+          })
+        }
+        throw err
+      }
+      return confirmUserOperation({
+        provider: this.chainProvider,
         entryPoint: this.config.contracts.entryPoint,
-        fetchImpl: this.config.fetchImpl,
+        userOpHash,
+        txHash,
+        timeoutMs: this.config.receiptTimeoutMs,
       })
-      const receipt = await this.chainProvider.waitForTransaction(txHash)
-      if (!receipt) throw new Error(`[cofferdam-sdk] sendTransaction: relayed tx ${txHash} was not mined`)
-      return receipt
     }
 
     // PoC: the deployer key doubles as the bundler and submits handleOps itself.
@@ -780,7 +876,13 @@ export class NativeAccountProvider implements CofferdamProvider {
       bundler,
     )
     const tx = (await entryPointWithSigner.handleOps([finalUserOp], bundler.getAddress())) as ContractTransactionResponse
-    return tx.wait() as Promise<TransactionReceipt>
+    return confirmUserOperation({
+      provider: bundlerProvider,
+      entryPoint: this.config.contracts.entryPoint,
+      userOpHash,
+      txHash: tx.hash,
+      timeoutMs: this.config.receiptTimeoutMs,
+    })
   }
 
   // ── Authority management (multi-device) ─────────────────────────────────────
@@ -1068,4 +1170,47 @@ function packGasFees(maxPriorityFeePerGas: bigint, maxFeePerGas: bigint): string
   const mask = (1n << 128n) - 1n
   const packed = (maxPriorityFeePerGas & mask) << 128n | (maxFeePerGas & mask)
   return '0x' + packed.toString(16).padStart(64, '0')
+}
+
+/** The tip used when the node's own suggestion cannot be read: 0.001 gwei, Base's usual. */
+export const L1_LANE_FALLBACK_TIP = 1_000_000n
+
+/**
+ * The op's price on the unsponsored mainnet lane (`preVerificationGas:
+ * 'l1-fee'`): 2 × the latest base fee + the node's tip. The lane refuses a
+ * price under the base fee (`fee_too_low`), and `eth_gasPrice` (base fee + a
+ * small tip) falls under it when the base fee rises before the plane checks,
+ * hence the doubled base fee. ethers' `getFeeData` substitutes 1 gwei for the
+ * tip when `eth_maxPriorityFeePerGas` fails, which the lane's 1 gwei cap
+ * refuses (`fee_too_high`), so its tip is never used: the base fee is
+ * recovered from its `maxFeePerGas = 2 × base + tip`, and the tip is
+ * `eth_gasPrice` minus the base fee (op-geth's suggestion), else
+ * `L1_LANE_FALLBACK_TIP`.
+ */
+export function l1LaneGasPrice(fee: {
+  gasPrice: bigint | null
+  maxFeePerGas: bigint | null
+  maxPriorityFeePerGas: bigint | null
+}): bigint {
+  if (fee.maxFeePerGas === null || fee.maxPriorityFeePerGas === null) return fee.gasPrice ?? 1_000_000_000n
+  const base = (fee.maxFeePerGas - fee.maxPriorityFeePerGas) / 2n
+  const tip = fee.gasPrice !== null && fee.gasPrice > base ? fee.gasPrice - base : L1_LANE_FALLBACK_TIP
+  return 2n * base + tip
+}
+
+/**
+ * `prefundCheck`'s stand-in for an `'l1-fee'` op's preVerificationGas: the L1
+ * data fee of a bind (a few kilobytes of proof) at Base's prices is far under
+ * it, so the figure errs high.
+ */
+export const L1_PVG_ALLOWANCE = 500_000n
+
+/** `NativeAccountProvider.prefundCheck`: what an unsponsored op may take from the account, and what it holds. */
+export interface PrefundCheck {
+  account: string
+  deployed: boolean
+  /** Wei: the EntryPoint's prefund for the op at today's price. */
+  required: bigint
+  /** Wei: the account's balance plus its EntryPoint deposit. */
+  available: bigint
 }
