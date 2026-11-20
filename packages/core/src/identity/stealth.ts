@@ -187,7 +187,7 @@ function hashSharedSecret(shared: Uint8Array): { h: Uint8Array; hn: bigint } {
 
 /**
  * The stealth signer P = S + h·G for a spending key and a shared-secret hash:
- * what the plane's `self` route checks (0086 rule 5), with no ephemeral
+ * what the plane's `addresses` route checks (0086 rule 5), with no ephemeral
  * secret and no viewing key.
  *
  * @param spendingPublicKey - S, 33 bytes.
@@ -283,7 +283,7 @@ export interface StealthMatch {
   account: string
   /** Its stealth signer. */
   signer: string
-  /** h, which the `self` route's registration carries (0086 question 18, open). */
+  /** h, which the `addresses` route's registration carries (0086 question 18, ruled 2026-11-19). */
   sharedSecretHash: Uint8Array
 }
 
@@ -345,12 +345,12 @@ export function computeStealthPrivateKey(
   return { privateKey, signer: secp256k1Address(privateKey), sharedSecretHash: h }
 }
 
-// ASSUMPTION(0086 q18): there is no pending route; an address reaches the
-// plane from the recipient's phone (a scan, or its own derivation) with the
-// handle key's signature over the address, R and h, and the plane checks
-// P = S + h·G against the meta-address the registration names. Open.
+// 0086 q18 (ruled 2026-11-19 as recommended): there is no pending route; an
+// address reaches the plane from the recipient's phone (a scan, or its own
+// derivation) with the handle key's signature over the address, R and h, and
+// the plane checks P = S + h·G against the meta-address the registration names.
 /**
- * The plane's check of a `self` registration (0086 rule 5 and question 18):
+ * The plane's check of an `addresses` registration (0086 rule 5 and question 18):
  * the account is the factory's for P = S + h·G, with S the spending key of
  * the meta-address the registration names, and the view tag is h[0]. The
  * handle key's signature over the registration is checked separately

@@ -222,17 +222,18 @@ export function deriveRootKeys(phrase: string): CofferdamRootKeys {
 export const HANDLE_SEED_LABELS = Object.freeze({
   /** `cofferdam-handle-root-v1:<epoch>`: the handle root of epoch e (rule 1). */
   handleRoot: 'cofferdam-handle-root-v1',
-  // ASSUMPTION(0086 q12): the Tier 1 XMTP identity key leaves the handle root
-  // for a counter of its own, `cofferdam-tier1-v1:<k>`, k from 0. Open; this
-  // is the one place the label lives, so another ruling moves only this line.
-  /** `cofferdam-tier1-v1:<k>`: the Tier 1 XMTP identity key, k from 0 (question 12, open). */
+  // 0086 q12 (ruled 2026-11-19 as recommended): the Tier 1 XMTP identity key
+  // leaves the handle root for a counter of its own, `cofferdam-tier1-v1:<k>`,
+  // k from 0. This is the one place the label lives, so another ruling moves only this line.
+  /** `cofferdam-tier1-v1:<k>`: the Tier 1 XMTP identity key, k from 0 (question 12, ruled 2026-11-19). */
   tier1: 'cofferdam-tier1-v1',
   /** `cofferdam-xmtp-recovery-v1`: the XMTP recovery identity, kept by the phrase alone (rule 1). */
   xmtpRecovery: 'cofferdam-xmtp-recovery-v1',
-  // ASSUMPTION(0086 q13): a releasing label's owner moves to a release key
-  // only the phrase derives, `cofferdam-handle-release-v1:<handleId>`, with
-  // handleId written as 0x-prefixed lowercase hex. Open.
-  /** `cofferdam-handle-release-v1:<handleId hex>`: the release key of a releasing label (question 13, open). */
+  // 0086 q13 (ruled 2026-11-19 as recommended): a releasing label's owner
+  // moves to a release key only the phrase derives,
+  // `cofferdam-handle-release-v1:<handleId>`, with handleId written as
+  // 0x-prefixed lowercase hex.
+  /** `cofferdam-handle-release-v1:<handleId hex>`: the release key of a releasing label (question 13, ruled 2026-11-19). */
   handleRelease: 'cofferdam-handle-release-v1',
 } as const)
 
@@ -263,7 +264,7 @@ export function deriveHandleRoot(seed: Uint8Array, epoch: number): Uint8Array {
 
 /**
  * Key material of the Tier 1 XMTP identity key number `k` (decision 0086
- * question 12, open; see `HANDLE_SEED_LABELS.tier1`). `handleRoot.ts` turns it
+ * question 12, ruled 2026-11-19; see `HANDLE_SEED_LABELS.tier1`). `handleRoot.ts` turns it
  * into a secp256k1 key.
  *
  * @param seed - The phrase's 64-byte seed.
@@ -291,7 +292,7 @@ export function deriveXmtpRecoveryKeyMaterial(seed: Uint8Array): Uint8Array {
 
 /**
  * Key material of the release key of one releasing label (decision 0086
- * question 13, open; see `HANDLE_SEED_LABELS.handleRelease`).
+ * question 13, ruled 2026-11-19; see `HANDLE_SEED_LABELS.handleRelease`).
  *
  * @param seed - The phrase's 64-byte seed (the new phrase's after a rotation).
  * @param handleId - The label's 32-byte `handleId`.
