@@ -10,7 +10,7 @@
 //
 // Every HKDF here is HKDF-SHA256 with rootKeys' salt and a 32-byte output.
 // The Tier 1 key is not under the handle root: decision 0086 question 12
-// (open) puts it on its own counter (rootKeys.deriveTier1KeyMaterial).
+// (ruled 2026-11-19) puts it on its own counter (rootKeys.deriveTier1KeyMaterial).
 //
 // The handle key signs the anchor, the registry's handle-scoped requests,
 // handshake halves and rename notices, and holds no funds. A linked phone
@@ -121,7 +121,7 @@ export function deriveHandleEpochKeys(seed: Uint8Array, epoch: number): HandleEp
 }
 
 /**
- * The Tier 1 XMTP identity key number `k` (decision 0086 question 12, open):
+ * The Tier 1 XMTP identity key number `k` (decision 0086 question 12, ruled 2026-11-19):
  * registered with XMTP as a plain key, it signs identity actions only.
  *
  * @param seed - The phrase's 64-byte seed.
@@ -143,7 +143,7 @@ export function deriveXmtpRecoveryIdentity(seed: Uint8Array): Secp256k1KeyPair {
 }
 
 /**
- * The release key of a releasing label (decision 0086 question 13, open): a
+ * The release key of a releasing label (decision 0086 question 13, ruled 2026-11-19): a
  * phrase phone moves the old record to it when the anchor watch sees a
  * cancelled release or a queued change it did not make.
  *

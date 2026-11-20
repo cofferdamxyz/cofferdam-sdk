@@ -136,19 +136,34 @@ const f = (name: string, type: string): TypedDataField => ({ name, type })
  * - `RegistrarClaim`: a registrar; `OwnerClaim`: the claiming handle key.
  * - `TransferOwner`, `SetMetaAddress`, `Release`, `Cancel`: the owner, taking
  *   effect after 72 hours (`Cancel` at once); `TransferOwnerAccept`: the new key.
+ * - `RegistrarTransferOwner`, `RegistrarSetMetaAddress`, `RegistrarCancel`: a
+ *   registrar, on `advance`'s terms (a High ceremony and the pinned locator,
+ *   question 19). Only `Release` takes the owner alone, so the handle key of
+ *   a removed or stolen linked phone can neither move the record nor keep
+ *   raising its nonce (the review of 2026-11-19, H1 and M1).
  * - `Advance`: the owner; `AdvanceAccept`: the new key; `RegistrarAdvance`: a
  *   registrar, after a High ceremony. Immediate.
  * - `Hold`, `RenewHold`, `Veto`: a registrar, after a High ceremony.
- * - `Unfreeze`: the owner; `RegistrarUnfreeze`: a registrar (question 15, open).
+ * - `Unfreeze`: the owner; `RegistrarUnfreeze`: a registrar (question 15, ruled 2026-11-19).
  */
 export const HANDLE_ANCHOR_TYPES = Object.freeze({
   RegistrarClaim: [f('handleId', 'bytes32'), f('owner', 'address'), f('serial', 'uint64'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   OwnerClaim: [f('handleId', 'bytes32'), f('metaAddress', 'bytes'), f('serial', 'uint64')],
   TransferOwner: [f('handleId', 'bytes32'), f('newOwner', 'address'), f('newMetaAddress', 'bytes'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   TransferOwnerAccept: [f('handleId', 'bytes32'), f('previousOwner', 'address'), f('newMetaAddress', 'bytes'), f('nonce', 'uint256'), f('deadline', 'uint64')],
+  RegistrarTransferOwner: [
+    f('handleId', 'bytes32'),
+    f('previousOwner', 'address'),
+    f('newOwner', 'address'),
+    f('newMetaAddress', 'bytes'),
+    f('nonce', 'uint256'),
+    f('deadline', 'uint64'),
+  ],
   SetMetaAddress: [f('handleId', 'bytes32'), f('newMetaAddress', 'bytes'), f('nonce', 'uint256'), f('deadline', 'uint64')],
+  RegistrarSetMetaAddress: [f('handleId', 'bytes32'), f('newMetaAddress', 'bytes'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   Release: [f('handleId', 'bytes32'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   Cancel: [f('handleId', 'bytes32'), f('pendingNonce', 'uint256'), f('nonce', 'uint256'), f('deadline', 'uint64')],
+  RegistrarCancel: [f('handleId', 'bytes32'), f('pendingNonce', 'uint256'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   Advance: [f('handleId', 'bytes32'), f('newOwner', 'address'), f('newMetaAddress', 'bytes'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   AdvanceAccept: [f('handleId', 'bytes32'), f('previousOwner', 'address'), f('newMetaAddress', 'bytes'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   RegistrarAdvance: [
@@ -162,12 +177,12 @@ export const HANDLE_ANCHOR_TYPES = Object.freeze({
   Hold: [f('handleId', 'bytes32'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   RenewHold: [f('handleId', 'bytes32'), f('frozenUntil', 'uint64'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   Veto: [f('handleId', 'bytes32'), f('pendingNonce', 'uint256'), f('nonce', 'uint256'), f('deadline', 'uint64')],
-  // ASSUMPTION(0086 q15): `unfreeze(handleId)` exists, signed by the owner
-  // and a registrar, each naming the freeze it lifts by its `frozenUntil`.
-  // Open; under question 15's alternative B both types go.
+  // 0086 q15 (ruled 2026-11-19 as recommended): `unfreeze(handleId)` exists,
+  // signed by the owner and a registrar, each naming the freeze it lifts by
+  // its `frozenUntil`.
   Unfreeze: [f('handleId', 'bytes32'), f('frozenUntil', 'uint64'), f('nonce', 'uint256'), f('deadline', 'uint64')],
   RegistrarUnfreeze: [f('handleId', 'bytes32'), f('frozenUntil', 'uint64'), f('nonce', 'uint256'), f('deadline', 'uint64')],
-  // ASSUMPTION(0086 q16): no owner brake on the Safe's pending `rekey`, so no type for one.
+  // 0086 q16 (ruled 2026-11-19 as recommended): no owner brake on the Safe's pending `rekey`, so no type for one.
 } satisfies Record<string, TypedDataField[]>)
 
 // Registry requests carry a random 32-byte `nonce` the plane refuses to see
@@ -184,7 +199,7 @@ export const HANDLE_ANCHOR_TYPES = Object.freeze({
  *   id only while on (empty when off);
  * - `RenameHandle`: by the old key, naming the new label and the next epoch's keys;
  * - `ReleaseHandle`: give the label up;
- * - `RegisterAddress`: the `self` route, an address the user's phone derived
+ * - `RegisterAddress`: the `addresses` route (named `self` until 2026-11-19), an address the user's phone derived
  *   or found by a scan, with R, h and the meta-address it derives from.
  */
 export const HANDLE_REGISTRY_TYPES = Object.freeze({

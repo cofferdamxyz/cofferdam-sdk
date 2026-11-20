@@ -89,9 +89,16 @@ export function buildHandleFixture(): Record<string, unknown> {
     ['OwnerClaim', 'owner', { handleId: ana, metaAddress: meta0, serial: 1 }],
     ['TransferOwner', 'owner', { handleId: ana, newOwner: e1.handleKey.address, newMetaAddress: meta1, nonce: 1, deadline }],
     ['TransferOwnerAccept', 'newOwner', { handleId: ana, previousOwner: e0.handleKey.address, newMetaAddress: meta1, nonce: 1, deadline }],
+    [
+      'RegistrarTransferOwner',
+      'registrar',
+      { handleId: ana, previousOwner: e0.handleKey.address, newOwner: e1.handleKey.address, newMetaAddress: meta1, nonce: 1, deadline },
+    ],
     ['SetMetaAddress', 'owner', { handleId: ana, newMetaAddress: meta1, nonce: 1, deadline }],
+    ['RegistrarSetMetaAddress', 'registrar', { handleId: ana, newMetaAddress: meta1, nonce: 1, deadline }],
     ['Release', 'owner', { handleId: ana, nonce: 1, deadline }],
     ['Cancel', 'owner', { handleId: ana, pendingNonce: 1, nonce: 2, deadline }],
+    ['RegistrarCancel', 'registrar', { handleId: ana, pendingNonce: 1, nonce: 2, deadline }],
     ['Advance', 'owner', { handleId: ana, newOwner: e1.handleKey.address, newMetaAddress: meta1, nonce: 1, deadline }],
     ['AdvanceAccept', 'newOwner', { handleId: ana, previousOwner: e0.handleKey.address, newMetaAddress: meta1, nonce: 1, deadline }],
     [
