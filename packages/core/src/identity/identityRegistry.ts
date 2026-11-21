@@ -164,6 +164,10 @@ export const COFFERDAM_IDENTITY_REGISTRY_ABI = [
   'error RebindNotReady(uint48 readyAt)',
   'error RebindStale(bytes32 identifier)',
   'error NotBoundAccount(address caller, address bound)',
+  // Relink and claims on a retired identifier (decision 0080 P4, base-contracts main since 2026-11-19)
+  'error RebindPending(bytes32 identifier)',
+  'error RetiredNeedsRuling(bytes32 identifier)',
+  'error NotRetired(bytes32 identifier)',
   // ZKPassportEvidenceAdapter (constructor errors omitted: they never reach a call)
   'error MalformedEvidence()',
   'error WrongIdentifierType(uint256 expected, uint256 got)',
@@ -177,6 +181,7 @@ export const COFFERDAM_IDENTITY_REGISTRY_ABI = [
   'error AgeNotProven(uint8 minAge)',
   'error ExpiryNotProven(uint256 earliest)',
   'error DisclosureRefused(uint8 sectionType)',
+  'error VerificationMethodRefused(uint256 method)',
   'error MalformedCommittedInputs()',
   'error BindSectionCount(uint256 count)',
 ] as const
