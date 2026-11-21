@@ -1,0 +1,105 @@
+import type { P256PublicKey, PasskeySigner } from './passkey.js';
+/** Wire-format version of the newest device-handoff payload this SDK creates. */
+export declare const DEVICE_HANDOFF_VERSION = 2;
+/** The device-handoff versions this SDK decodes: 1 has no handover key, 2 has one. */
+export type DeviceHandoffVersion = 1 | 2;
+/** Upper bound on a human device label, so a QR stays scannable. */
+export declare const MAX_DEVICE_LABEL_LENGTH = 64;
+/** Default freshness window: a scanned QR older than this is rejected. */
+export declare const DEFAULT_HANDOFF_MAX_AGE_MS: number;
+/** The fields the new device commits to (everything but the version + signature). */
+export interface DeviceHandoffFields {
+    /** base64url WebAuthn credential id of the new device's passkey. */
+    credentialId: string;
+    /** The new passkey's P-256 public key — becomes the account authority config. */
+    publicKey: P256PublicKey;
+    /** Human-readable device label, e.g. "Pixel 7" / "Mevlüt's iPad". */
+    label: string;
+    /** Unix epoch milliseconds when the QR was generated (replay bound). */
+    ts: number;
+    /** The new device's own counterfactual AA address (binds the proof to it). */
+    deviceAccount: string;
+    /**
+     * The 32-byte challenge from the canonical device's invitation (QR #1),
+     * 0x-prefixed hex. When present it is folded into the digest, so the
+     * canonical device accepts only a handoff produced for its own invitation.
+     * Required in v2.
+     */
+    challenge?: string;
+    /**
+     * 0x-hex X25519 public key; present iff v2. The linked device seals the
+     * account's root keys to it (workspace decision 0081, step 5); the matching
+     * private key never leaves the new device.
+     */
+    handoverKey?: string;
+}
+/** A full, self-contained device-handoff payload (the QR content, decoded). */
+export interface DeviceHandoff extends DeviceHandoffFields {
+    /** 2 exactly when `handoverKey` is present, otherwise 1. */
+    v: DeviceHandoffVersion;
+    /** WebAuthn assertion (abi.encode(WebAuthnAuth)) over `deviceHandoffDigest`. */
+    livenessSig: string;
+}
+/** Base class for every device-handoff failure. */
+export declare class DeviceHandoffError extends Error {
+    constructor(message: string);
+}
+/** The scanned token was not a well-formed Cofferdam handoff payload. */
+export declare class DeviceHandoffDecodeError extends DeviceHandoffError {
+}
+/** The QR is older than `maxAgeMs` (or clock-skewed into the future). */
+export declare class DeviceHandoffExpiredError extends DeviceHandoffError {
+}
+/** The liveness proof failed: the QR was not signed by the presented passkey. */
+export declare class DeviceHandoffLivenessError extends DeviceHandoffError {
+}
+/**
+ * The 32-byte digest the new device signs (and the canonical device recomputes).
+ * Commits to a domain separator + every handoff field, so tampering any field
+ * breaks the WebAuthn challenge match. A `handoverKey` selects the v2 digest,
+ * which needs the invitation challenge and encodes both in fixed positions;
+ * without one the v1 digest is computed exactly as before.
+ */
+export declare function deviceHandoffDigest(f: DeviceHandoffFields): Uint8Array;
+/**
+ * Build a signed handoff payload on the NEW device. Prompts the passkey (the
+ * injected `signer` performs the WebAuthn assertion over the digest, gating on
+ * biometric in production). The signer's public key is used unless `publicKey`
+ * is supplied explicitly. A `handoverKey` makes a v2 handoff and requires the
+ * invitation `challenge`; without one the handoff is v1.
+ */
+export declare function createDeviceHandoff(args: {
+    signer: PasskeySigner;
+    credentialId: string;
+    label: string;
+    deviceAccount: string;
+    publicKey?: P256PublicKey;
+    ts?: number;
+    /** The invitation challenge to bind this handoff to (see `DeviceHandoffFields.challenge`). */
+    challenge?: string;
+    /** The new device's X25519 public key, 0x-hex (see `DeviceHandoffFields.handoverKey`). */
+    handoverKey?: string | undefined;
+}): Promise<DeviceHandoff>;
+/** Serialize a handoff payload into a compact, prefixed QR token. */
+export declare function encodeDeviceHandoff(handoff: DeviceHandoff): string;
+/**
+ * Parse a scanned QR token into a structurally-valid `DeviceHandoff`. Throws
+ * `DeviceHandoffDecodeError` on any malformation. Does NOT verify the liveness
+ * proof — call `verifyDeviceHandoff` (or `decodeAndVerifyDeviceHandoff`).
+ */
+export declare function decodeDeviceHandoff(token: string): DeviceHandoff;
+/**
+ * Verify a decoded handoff: freshness (`maxAgeMs`, set 0 to skip) + the WebAuthn
+ * liveness proof that the presented passkey signed exactly these fields. Throws
+ * `DeviceHandoffExpiredError` / `DeviceHandoffLivenessError` on failure.
+ */
+export declare function verifyDeviceHandoff(handoff: DeviceHandoff, opts?: {
+    maxAgeMs?: number;
+    now?: number;
+}): void;
+/** Convenience: decode + verify in one call, returning the trusted payload. */
+export declare function decodeAndVerifyDeviceHandoff(token: string, opts?: {
+    maxAgeMs?: number;
+    now?: number;
+}): DeviceHandoff;
+//# sourceMappingURL=deviceHandoff.d.ts.map
