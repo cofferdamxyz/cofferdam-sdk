@@ -164,7 +164,10 @@ export function ceremonyDigest(domain: TypedDataDomain, message: CeremonyAttesta
 
 /**
  * Sign a ceremony attestation with a secp256k1 key. Test fixtures and local
- * networks only: the attester signs in its own Worker.
+ * networks only: the attester signs in its own Worker, so this is not
+ * exported from the package's entry point.
+ *
+ * @internal
  *
  * @returns The 65-byte signature r ‖ s ‖ v (v 27 or 28, low s), 0x hex.
  */

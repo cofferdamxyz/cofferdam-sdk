@@ -228,7 +228,6 @@ export {
   ceremonyDomain,
   ceremonyDigest,
   checkCeremonyMessage,
-  signCeremonyAttestation,
   recoverCeremonySigner,
   type CeremonyAction,
   type CeremonyAttestationMessage,

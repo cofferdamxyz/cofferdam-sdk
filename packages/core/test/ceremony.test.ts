@@ -6,9 +6,9 @@ import {
   ceremonyDigest,
   ceremonyDomain,
   recoverCeremonySigner,
-  signCeremonyAttestation,
   type CeremonyAttestationMessage,
 } from '../src/index.js'
+import { signCeremonyAttestation } from '../src/identity/ceremony.js'
 
 const KEY = Uint8Array.from(Buffer.from(id('ceremony.test attester').slice(2), 'hex'))
 const ATTESTER = new SigningKey(KEY)
