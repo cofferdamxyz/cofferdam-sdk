@@ -164,6 +164,22 @@ verifyHandshakeHalf(half, { chainId: 84532, anchor: { owner, serial, frozen, pen
 - `handshake.ts`: the half and its reply, the pairwise secret (HKDF over X25519), the rename notice and the contact record codec (no address).
 - `packages/core/test/fixtures/handleAnchorTypes.json` is the shared fixture the anchor contract's and the plane's tests read: type strings, typehashes, domain separators, a signature per type from fixed test keys, and stealth vectors. `yarn test` fails when the SDK drifts from it; `WRITE_HANDLE_FIXTURE=1 yarn test handleFixture` rewrites it.
 
+## Ceremony attestation (EIP-712)
+
+A Cofferdam ceremony attester co-signs the first `cofferdam.xyz` passkey on a partner-app account, the pre-High partner re-key and hard recovery (Cofferdam decision 0016). From the production account generation on, `CofferdamAccount4337` verifies that co-sign as EIP-712 typed data (decision 0090 item 5), so the attester's key can sit behind a policy that pins what it signs:
+
+```ts
+import { ceremonyDomain, ceremonyDigest, recoverCeremonySigner, CEREMONY_ACTIONS } from '@cofferdam/sdk'
+
+// domain: ("Cofferdam Ceremony", "1", chainId, the generation's CofferdamCeremonyAttesterRegistry)
+const domain = ceremonyDomain(8453, ceremonyRegistry)
+const message = { account, action: CEREMONY_ACTIONS['enroll-first-high'], newKeyHash, partnerId, nonce, notBefore, expiry }
+ceremonyDigest(domain, message)                         // equals the account's ceremonyHash(...)
+recoverCeremonySigner(domain, message, signature)       // compare with the registry's isTrustedAttester
+```
+
+The domain names the registry, never the account; the account is in the message, so an attestation never replays on another account. Accounts of Base Sepolia's deployed generation verify EIP-191 instead; the SDK carries only the typed form. `packages/core/test/fixtures/ceremonyTypes.json` is the shared fixture the account contract's, the attester's and the plane's tests read; `WRITE_CEREMONY_FIXTURE=1 yarn test ceremonyFixture` rewrites it.
+
 ## Identity registry (passport binding)
 
 `CofferdamIdentityRegistry` binds one person's identifier to one account; the person proves it with ZKPassport through `ZKPassportEvidenceAdapter` (Cofferdam decision 0080). The account itself calls the registry, and every proof is bound to a digest the registry hands out for the account's next action.
@@ -233,7 +249,7 @@ Profiles: `verified-br`, `verified-us`, `unverified`, `ofac-flagged`, `stale-pro
 | Root keys from the 24-word recovery phrase: the Vault, messaging and recovery keys, the PRF envelope key, the passport secret on its existing path | ✅ Built |
 | Spot escrow and escrow factory clients | ✅ Built |
 | Mock and local-chain providers, React bindings | ✅ Built |
-| Accounts that start from a partner app's passkey; first Cofferdam passkey on such an account | 📋 Planned |
+| Accounts that start from a partner app's passkey; first Cofferdam passkey on such an account | 📋 Planned (the ceremony attestation's EIP-712 types, digest and signer check are built, decision 0090 item 5) |
 | `csa1:` version 2: device binding, expiry, audience, fast and slow tiers | ✅ Built |
 | `csa1:` version 2's `actions[]`, signed by a partner app's key | 📋 Planned |
 | Handle keys and codecs of decision 0086: grammar, `handleId`, epoch keys, ERC-5564 scheme 1, EIP-712 types of the anchor and registry, handshake halves, rename notice, contact record | ✅ Built (no client yet; open questions assumed in code) |
