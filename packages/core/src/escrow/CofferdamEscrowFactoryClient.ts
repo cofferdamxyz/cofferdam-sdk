@@ -5,7 +5,6 @@
 //
 //   - createSpotEscrow(token, policy, salt) — deploy a new spot escrow
 //   - predictSpotEscrowAddress(token, policy, salt) — pre-compute the address
-//   - isTokenAllowed / allowToken / disallowToken — the token allowlist
 //   - authorize / revoke — owner-only access control
 //
 // Each escrow holds one ERC-20 named at creation and fixed for its life; the
@@ -104,11 +103,6 @@ export class CofferdamEscrowFactoryClient {
   // Reads
   // ──────────────────────────────────────────────────────────────────────
 
-  /** True when new escrows may be created in `token` (the owner's allowlist). */
-  async isTokenAllowed(token: string): Promise<boolean> {
-    return (await this.readonlyContract.allowedTokens(token)) as boolean
-  }
-
   /** Factory owner (can authorize/revoke callers). */
   async getOwner(): Promise<string> {
     return (await this.readonlyContract.owner()) as string
@@ -163,22 +157,6 @@ export class CofferdamEscrowFactoryClient {
     }
 
     return { txHash: sent.hash, escrowAddress }
-  }
-
-  /** Owner adds a token new escrows may be created in. */
-  async allowToken(token: string, opts: TxOptions = {}): Promise<{ txHash: string }> {
-    const sent = await this.contract.allowToken(token)
-    opts.onSent?.(sent.hash)
-    await sent.wait()
-    return { txHash: sent.hash }
-  }
-
-  /** Owner stops new escrows in a token; escrows already made keep it. */
-  async disallowToken(token: string, opts: TxOptions = {}): Promise<{ txHash: string }> {
-    const sent = await this.contract.disallowToken(token)
-    opts.onSent?.(sent.hash)
-    await sent.wait()
-    return { txHash: sent.hash }
   }
 
   /** Owner authorizes a caller to create escrows. */

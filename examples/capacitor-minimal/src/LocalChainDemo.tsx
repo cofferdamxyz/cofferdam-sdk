@@ -967,7 +967,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
             <button
               className="action"
               onClick={createEscrow}
-              disabled={!roles.recruiter.wallet || !cfg.factoryAddress || !roles.funder.session || !roles.worker.session}
+              disabled={!roles.recruiter.wallet || !cfg.factoryAddress || !cfg.tokenAddress || !roles.funder.session || !roles.worker.session}
               title="HR creates a new spot escrow via the EscrowFactory (CREATE2). Requires all roles signed in."
             >
               0️⃣ Create escrow (factory, CREATE2)

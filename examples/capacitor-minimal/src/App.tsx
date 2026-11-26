@@ -12,9 +12,9 @@
 //                              Four roles on a single page (Finance +
 //                              HR + Supervisor witness + Worker) drive
 //                              the spot escrow on-chain:
-//                                approveUSDC + fund → setWitness (HR) →
+//                                approveToken + fund → setWitness (HR) →
 //                                checkIn (supervisor) → checkOut (supervisor,
-//                                auto-releases USDC).
+//                                auto-releases the escrow's token, MockUSDC here).
 //                              You see every tx hash + status as it lands.
 //
 //   - `sepolia-testnet` (α-3): same UI + flow as local-chain, but pointed at
