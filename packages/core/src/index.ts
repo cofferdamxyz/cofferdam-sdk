@@ -216,6 +216,23 @@ export {
   deriveHandleReleaseKeyMaterial,
   type CofferdamRootKeys,
 } from './identity/rootKeys.js'
+// The ceremony attestation as EIP-712 (workspace decision 0090 item 5)
+export {
+  CEREMONY_DOMAIN_NAME,
+  CEREMONY_DOMAIN_VERSION,
+  CEREMONY_PRIMARY_TYPE,
+  CEREMONY_TYPES,
+  CEREMONY_TYPE_STRING,
+  CEREMONY_TYPEHASH,
+  CEREMONY_ACTIONS,
+  ceremonyDomain,
+  ceremonyDigest,
+  checkCeremonyMessage,
+  signCeremonyAttestation,
+  recoverCeremonySigner,
+  type CeremonyAction,
+  type CeremonyAttestationMessage,
+} from './identity/ceremony.js'
 // Handles, stealth addresses and handshakes (workspace decision 0086)
 export {
   toHandle,
