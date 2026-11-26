@@ -60,15 +60,15 @@ export const COFFERDAM_SPOT_ESCROW_ABI = [
   'function witnessHistory(uint256 index) view returns (address witness, address assignedBy, uint64 timestamp)',
   // ── events ───────────────────────────────────────────────────────────
   'event EscrowStateChanged(uint256 indexed escrowId, uint8 fromState, uint8 toState, address indexed actor, uint64 timestamp, bytes32 proofHash)',
-  'event EscrowFunded(uint256 indexed escrowId, uint256 amount, address indexed funder)',
-  'event EscrowReleased(uint256 indexed escrowId, uint256 amount, address indexed worker)',
-  'event EscrowRefunded(uint256 indexed escrowId, uint256 amount, address indexed funder)',
+  'event EscrowFunded(uint256 indexed escrowId, address indexed token, uint256 amount, address indexed funder)',
+  'event EscrowReleased(uint256 indexed escrowId, address indexed token, uint256 amount, address indexed worker)',
+  'event EscrowRefunded(uint256 indexed escrowId, address indexed token, uint256 amount, address indexed funder)',
   'event WitnessAssigned(address indexed witness, address indexed assignedBy)',
   'event WitnessReplaced(address indexed oldWitness, address indexed newWitness, address indexed replacedBy)',
   'event WorkerAwarded(address indexed worker, address indexed awardedBy)',
-  'event KillFeePaid(address indexed worker, uint256 amount, address indexed funder)',
+  'event KillFeePaid(address indexed worker, address indexed token, uint256 amount, address indexed funder)',
   'event EscrowDisputed(uint256 indexed escrowId, address indexed disputer, bytes32 reason)',
-  'event DisputeResolved(address indexed worker, uint256 workerAmount, address indexed funder, uint256 funderAmount, address indexed arbiter)',
+  'event DisputeResolved(address indexed worker, address token, uint256 workerAmount, address indexed funder, uint256 funderAmount, address indexed arbiter)',
 ] as const
 
 // ────────────────────────────────────────────────────────────────────────────
