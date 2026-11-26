@@ -2,16 +2,18 @@
 //
 // Typed, framework-agnostic client for the CofferdamSpotEscrow contract
 // on Base. Each escrow is its own contract instance deployed by
-// EscrowFactory.createSpotEscrow(policy). This client wraps one instance
-// with:
+// EscrowFactory.createSpotEscrow(token, policy, salt). This client wraps one
+// instance with:
 //
 //   - Full lifecycle  — `fund`, `setWitness`, `checkIn`, `checkOut`,
 //                        `cancel`, `refund`, `voidEscrow`
-//   - State reads     — `getState()`, `getPolicy()`, `getUSDC()`
-//   - USDC approval   — `approveUSDC()` helper for the funder
+//   - State reads     — `getState()`, `getPolicy()`, `getToken()`
+//   - Token approval  — `approveToken()` helper for the funder
 //
-// The contract is USDC-based (not ETH). The funder must approve USDC
-// transfer before calling `fund()`. The flow is:
+// Each escrow holds one ERC-20, fixed at creation from the factory's
+// allowlist (USDC, BRS; workspace decision 0100, question 7). Amounts are in
+// that token's base units. The funder must approve the token before calling
+// `fund()`. The flow is:
 //   deploy → fund → setWitness? → checkIn(worker) → checkOut()
 //                          ↑ HR         ↑ witness       ↑ witness (auto-release)
 
@@ -42,7 +44,7 @@ export const COFFERDAM_SPOT_ESCROW_ABI = [
   'function resolveDispute(uint256 workerAmount) external',
   'function claimAfterDisputeTimeout() external',
   // ── reads ────────────────────────────────────────────────────────────
-  'function USDC() view returns (address)',
+  'function token() view returns (address)',
   'function selfWitnessed() view returns (bool)',
   'function policy() view returns (tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow))',
   'function state() view returns (uint8)',
@@ -183,9 +185,9 @@ export class CofferdamSpotEscrowClient {
   }
 
   /**
-   * Funder deposits USDC into the escrow. Caller must be the policy funder
-   * and must have approved USDC for the escrow contract first (see
-   * `approveUSDC`). Escrow must be in `Created` state. The worker is awarded
+   * Funder deposits the escrow's token. Caller must be the policy funder
+   * and must have approved the token for the escrow contract first (see
+   * `approveToken`). `amount` is in the token's base units. Escrow must be in `Created` state. The worker is awarded
    * right after funding (see `awardWorker`).
    */
   async fund(amount: bigint, opts: TxOptions = {}): Promise<TxResult> {
@@ -196,14 +198,14 @@ export class CofferdamSpotEscrowClient {
   }
 
   /**
-   * Approve USDC transfer for the escrow contract. Must be called by the
-   * funder before `fund()`. Uses the USDC address from the contract.
+   * Approve the escrow's token for the escrow contract. Must be called by
+   * the funder before `fund()`. Uses the token address from the contract.
    */
-  async approveUSDC(amount: bigint, opts: TxOptions = {}): Promise<TxResult> {
-    const usdcAddr = await this.getUSDC()
+  async approveToken(amount: bigint, opts: TxOptions = {}): Promise<TxResult> {
+    const tokenAddr = await this.getToken()
     const erc20Abi = ['function approve(address spender, uint256 amount) returns (bool)']
-    const usdc = new EthContract(usdcAddr, erc20Abi, this.signer)
-    const sent = await usdc.approve(this.address, amount)
+    const token = new EthContract(tokenAddr, erc20Abi, this.signer)
+    const sent = await token.approve(this.address, amount)
     opts.onSent?.(sent.hash)
     await sent.wait()
     return { txHash: sent.hash }
@@ -222,7 +224,7 @@ export class CofferdamSpotEscrowClient {
 
   /**
    * Witness check-out. Only the assigned witness can call this.
-   * Auto-releases USDC to the worker. Escrow in `Active`.
+   * Auto-releases the token to the worker. Escrow in `Active`.
    */
   async checkOut(opts: TxOptions = {}): Promise<TxResult> {
     const sent = await this.contract.checkOut()
@@ -340,9 +342,9 @@ export class CofferdamSpotEscrowClient {
   // Reads
   // ──────────────────────────────────────────────────────────────────────
 
-  /** USDC token address used by this escrow. */
-  async getUSDC(): Promise<string> {
-    return (await this.readonlyContract.USDC()) as string
+  /** The ERC-20 this escrow holds and pays out, fixed at creation. */
+  async getToken(): Promise<string> {
+    return (await this.readonlyContract.token()) as string
   }
 
   /**

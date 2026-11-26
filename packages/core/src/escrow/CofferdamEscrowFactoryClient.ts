@@ -3,12 +3,17 @@
 // Typed, framework-agnostic client for creating spot (and payroll) escrows
 // via the EscrowFactory contract. Uses CREATE2 for deterministic addresses.
 //
-//   - createSpotEscrow(policy, salt) — deploy a new spot escrow
-//   - predictSpotEscrowAddress(policy, salt) — pre-compute the address
+//   - createSpotEscrow(token, policy, salt) — deploy a new spot escrow
+//   - predictSpotEscrowAddress(token, policy, salt) — pre-compute the address
+//   - isTokenAllowed / allowToken / disallowToken — the token allowlist
 //   - authorize / revoke — owner-only access control
 //
-// The factory enforces access control: only authorized callers can create
-// escrows. The deployer is auto-authorized.
+// Each escrow holds one ERC-20 named at creation and fixed for its life; the
+// factory creates escrows only in tokens on its owner's allowlist (USDC and
+// BRS; workspace decision 0100, question 7). `policy.amount` is in that
+// token's base units: 1 USDC is 1e6, 1 BRS on Base 1e6, 1 pBRL on Base
+// Sepolia 1e18. The factory enforces access control: only authorized callers
+// can create escrows. The deployer is auto-authorized.
 
 import {
   Contract as EthContract,
@@ -24,19 +29,24 @@ import type { SpotEscrowPolicy } from './CofferdamSpotEscrowClient'
 
 export const COFFERDAM_ESCROW_FACTORY_ABI = [
   // ── writes ──────────────────────────────────────────────────────────
-  'function createSpotEscrow(tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow) policy, bytes32 salt) returns (address)',
-  'function createPayrollEscrow(address funder, bytes32 companyOrgRoot, tuple(address funder, bytes32 workerRole, uint48 payPeriodEnd, uint32 payInterval) policy, bytes32 salt) returns (address)',
+  'function createSpotEscrow(address token, tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow) policy, bytes32 salt) returns (address)',
+  'function createPayrollEscrow(address token, address funder, bytes32 companyOrgRoot, tuple(address worker, bytes32 workerRole, bytes32 managerRole, uint48 payPeriodStart, uint48 payPeriodEnd, uint32 releaseDelay, uint32 disputeWindow, bool managerApproval) policy, bytes32 salt) returns (address)',
+  'function allowToken(address token)',
+  'function disallowToken(address token)',
   'function authorize(address caller)',
   'function revoke(address caller)',
   'function transferOwnership(address newOwner)',
   // ── reads ────────────────────────────────────────────────────────────
-  'function USDC() view returns (address)',
   'function owner() view returns (address)',
   'function authorizedCallers(address) view returns (bool)',
-  'function predictSpotEscrowAddress(tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow) policy, bytes32 salt) view returns (address)',
+  'function allowedTokens(address) view returns (bool)',
+  'function predictSpotEscrowAddress(address token, tuple(address funder, address recruiter, bytes32 workerNullifier, uint32 checkInTimeout, uint32 checkOutTimeout, address witness, address arbiter, uint16 killFeeBps, uint256 amount, bytes32 termsHash, uint64 jobStartTime, uint32 disputeWindow) policy, bytes32 salt) view returns (address)',
   // ── events ───────────────────────────────────────────────────────────
-  'event SpotEscrowCreated(address indexed escrow, address indexed funder, address indexed recruiter, bytes32 workerNullifier, address witness)',
-  'event PayrollEscrowCreated(address indexed escrow, address indexed funder, bytes32 workerRole, uint48 payPeriodEnd)',
+  'event SpotEscrowCreated(address indexed escrow, address indexed funder, address indexed recruiter, address token, bytes32 workerNullifier, address witness)',
+  'event PayrollEscrowCreated(address indexed escrow, address indexed funder, address indexed token, bytes32 workerRole, uint48 payPeriodEnd)',
+  'event TokenAllowed(address indexed token, uint8 decimals, address indexed allowedBy)',
+  'event TokenDisallowed(address indexed token, address indexed disallowedBy)',
+  'event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)',
   'event CallerAuthorized(address indexed caller, address indexed authorizedBy)',
   'event CallerRevoked(address indexed caller, address indexed revokedBy)',
 ] as const
@@ -94,9 +104,9 @@ export class CofferdamEscrowFactoryClient {
   // Reads
   // ──────────────────────────────────────────────────────────────────────
 
-  /** USDC token address used by all escrows created by this factory. */
-  async getUSDC(): Promise<string> {
-    return (await this.readonlyContract.USDC()) as string
+  /** True when new escrows may be created in `token` (the owner's allowlist). */
+  async isTokenAllowed(token: string): Promise<boolean> {
+    return (await this.readonlyContract.allowedTokens(token)) as boolean
   }
 
   /** Factory owner (can authorize/revoke callers). */
@@ -111,10 +121,11 @@ export class CofferdamEscrowFactoryClient {
 
   /**
    * Pre-compute the spot escrow address before deployment.
-   * Uses the same CREATE2 formula as the contract.
+   * Uses the same CREATE2 formula as the contract; the token is part of it.
+   * Does not check the allowlist (`createSpotEscrow` does).
    */
-  async predictSpotEscrowAddress(policy: SpotEscrowPolicy, salt: string): Promise<string> {
-    return (await this.readonlyContract.predictSpotEscrowAddress(policy, salt)) as string
+  async predictSpotEscrowAddress(token: string, policy: SpotEscrowPolicy, salt: string): Promise<string> {
+    return (await this.readonlyContract.predictSpotEscrowAddress(token, policy, salt)) as string
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -122,15 +133,17 @@ export class CofferdamEscrowFactoryClient {
   // ──────────────────────────────────────────────────────────────────────
 
   /**
-   * Create a spot escrow via CREATE2. Caller must be authorized.
-   * Returns the deployed escrow address.
+   * Create a spot escrow via CREATE2 in `token`, which must be on the
+   * factory's allowlist. Caller must be authorized. `policy.amount` is in
+   * the token's base units. Returns the deployed escrow address.
    */
   async createSpotEscrow(
+    token: string,
     policy: SpotEscrowPolicy,
     salt: string,
     opts: TxOptions = {},
   ): Promise<TxResult> {
-    const sent = await this.contract.createSpotEscrow(policy, salt)
+    const sent = await this.contract.createSpotEscrow(token, policy, salt)
     opts.onSent?.(sent.hash)
     const receipt = await sent.wait()
 
@@ -150,6 +163,22 @@ export class CofferdamEscrowFactoryClient {
     }
 
     return { txHash: sent.hash, escrowAddress }
+  }
+
+  /** Owner adds a token new escrows may be created in. */
+  async allowToken(token: string, opts: TxOptions = {}): Promise<{ txHash: string }> {
+    const sent = await this.contract.allowToken(token)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
+  }
+
+  /** Owner stops new escrows in a token; escrows already made keep it. */
+  async disallowToken(token: string, opts: TxOptions = {}): Promise<{ txHash: string }> {
+    const sent = await this.contract.disallowToken(token)
+    opts.onSent?.(sent.hash)
+    await sent.wait()
+    return { txHash: sent.hash }
   }
 
   /** Owner authorizes a caller to create escrows. */

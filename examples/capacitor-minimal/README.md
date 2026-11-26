@@ -180,7 +180,7 @@ Each click produces one or more decoded lines in Terminal 4. The flow mirrors
 the contract's trust model: the **witness** attests, never the worker.
 
 1. **Sign in** the four roles — the admin EOA pre-funds each role's deterministic address with ETH on first sign-in. (This demo does not bind identities on-chain; that is the app's Self flow.)
-2. **Create Escrow** (HR) → `EscrowFactory.createSpotEscrow(policy, salt)`; the CREATE2 address appears in the log.
+2. **Create Escrow** (HR) → `EscrowFactory.createSpotEscrow(token, policy, salt)` in MockUSDC (`VITE_*_TOKEN_ADDRESS`, on the factory's allowlist); the CREATE2 address appears in the log.
 3. **Approve + Fund** (Finance) → `MockUSDC.approve` then `fund()`; state `Funded`.
 4. **Award Worker** (HR) → `awardWorker(worker)`.
 5. **Set Witness** (HR → Supervisor) → `setWitness(supervisor)`; HR remains the fallback witness.

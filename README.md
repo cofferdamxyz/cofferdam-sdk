@@ -188,15 +188,15 @@ await registry.isAccountBound(account)                         // true
 import { CofferdamEscrowFactoryClient, CofferdamSpotEscrowClient } from '@cofferdam/sdk'
 
 const factory = new CofferdamEscrowFactoryClient({ address: escrowFactory, signer })
-const { escrowAddress } = await factory.createSpotEscrow(policy, salt)
+const { escrowAddress } = await factory.createSpotEscrow(token, policy, salt) // token on the factory's allowlist
 
 const escrow = new CofferdamSpotEscrowClient({ address: escrowAddress, signer })
-await escrow.approveUSDC(amount)
+await escrow.approveToken(amount) // in the token's base units
 await escrow.fund(amount)
 const { state } = await escrow.getState()
 ```
 
-The clients take an `ethers` `Wallet`. From a Cofferdam account, encode the call with `COFFERDAM_SPOT_ESCROW_ABI` and send it through `NativeAccountProvider.sendTransaction`. The contract flow is fund, award, optional witness, witness check-in, witness check-out (which releases USDC to the worker), with refund, no-show, timeout and dispute exits.
+The clients take an `ethers` `Wallet`. From a Cofferdam account, encode the call with `COFFERDAM_SPOT_ESCROW_ABI` and send it through `NativeAccountProvider.sendTransaction`. The contract flow is fund, award, optional witness, witness check-in, witness check-out (which releases the escrow's token to the worker), with refund, no-show, timeout and dispute exits.
 
 ## React
 

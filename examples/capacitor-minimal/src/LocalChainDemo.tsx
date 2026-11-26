@@ -58,6 +58,8 @@ interface ChainConfig {
   receiver: string
   escrow: string
   factoryAddress: string
+  /** The token demo escrows are created in; must be on the factory's allowlist. */
+  tokenAddress: string
   adminPrivateKey: string
   recruiterId: string
   funderId: string
@@ -82,6 +84,8 @@ const SEPOLIA_DEFAULTS = {
   receiver: '',
   escrow: '',
   factoryAddress: '',
+  // MockUSDC on Base Sepolia (base-contracts/deployments/baseSepolia.json).
+  tokenAddress: '0x8c05Df95F91De2D70e0436B774fc9D1f86FF1f51',
 } as const
 
 function buildConfig(chain: ChainTarget): ChainConfig {
@@ -101,6 +105,9 @@ function buildConfig(chain: ChainTarget): ChainConfig {
       factoryAddress:
         (env.VITE_TESTNET_FACTORY_ADDRESS as string | undefined) ??
         SEPOLIA_DEFAULTS.factoryAddress,
+      tokenAddress:
+        (env.VITE_TESTNET_TOKEN_ADDRESS as string | undefined) ??
+        SEPOLIA_DEFAULTS.tokenAddress,
       // No default for testnet admin — there's no public-key analog of anvil's
       // rich wallet. Empty string here surfaces a clear error in the UI before
       // anything tries to sign.
@@ -134,6 +141,7 @@ function buildConfig(chain: ChainTarget): ChainConfig {
     receiver: (env.VITE_LOCAL_RECEIVER_ADDRESS as string | undefined) ?? '',
     escrow: (env.VITE_LOCAL_ESCROW_ADDRESS as string | undefined) ?? '',
     factoryAddress: (env.VITE_LOCAL_FACTORY_ADDRESS as string | undefined) ?? '',
+    tokenAddress: (env.VITE_LOCAL_TOKEN_ADDRESS as string | undefined) ?? '',
     adminPrivateKey:
       (env.VITE_LOCAL_ADMIN_PRIVATE_KEY as string | undefined) ?? ANVIL_RICH_WALLET_PK,
     recruiterId:
@@ -347,12 +355,12 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
 
   const refreshBalances = useCallback(async () => {
     const current = rolesRef.current
-    // Resolve USDC address from the escrow contract once per refresh
+    // Resolve the escrow's token (USDC in this demo) once per refresh
     let usdcAddr: string | null = null
     if (escrowAddr) {
       try {
-        const escrowRo = new EthContract(escrowAddr, ['function USDC() view returns (address)'], rpc)
-        usdcAddr = await escrowRo.USDC()
+        const escrowRo = new EthContract(escrowAddr, ['function token() view returns (address)'], rpc)
+        usdcAddr = await escrowRo.token()
       } catch {
         /* escrow not deployed yet, skip USDC */
       }
@@ -490,7 +498,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
   // actions (fund, setWitness, checkIn, checkOut) target the new escrow.
   const createEscrow = useCallback(async () => {
     const wallet = roles.recruiter.wallet
-    if (!wallet || !cfg.factoryAddress) return
+    if (!wallet || !cfg.factoryAddress || !cfg.tokenAddress) return
     const factory = new CofferdamEscrowFactoryClient({
       address: cfg.factoryAddress,
       signer: wallet,
@@ -524,7 +532,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
       cfg.explorerBase,
     )
     try {
-      const result = await factory.createSpotEscrow(policy, salt, {
+      const result = await factory.createSpotEscrow(cfg.tokenAddress, policy, salt, {
         onSent: (h) => tx.setHash(h),
       })
       setEscrowAddr(result.escrowAddress)
@@ -533,7 +541,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
     } catch (err) {
       tx.error(errMsg(err))
     }
-  }, [roles.recruiter.wallet, roles.funder.session?.accountAddress, roles.worker.session?.accountAddress, roles.recruiter.session?.accountAddress, arbiterWallet, killFeeBps, checkInTimeout, checkOutTimeout, disputeWindow, cfg.amountUsdc, cfg.factoryAddress, cfg.recruiterId, cfg.workerId, cfg.explorerBase, refreshBalances])
+  }, [roles.recruiter.wallet, roles.funder.session?.accountAddress, roles.worker.session?.accountAddress, roles.recruiter.session?.accountAddress, arbiterWallet, killFeeBps, checkInTimeout, checkOutTimeout, disputeWindow, cfg.amountUsdc, cfg.factoryAddress, cfg.tokenAddress, cfg.recruiterId, cfg.workerId, cfg.explorerBase, refreshBalances])
 
   const approveUSDC = useCallback(async () => {
     const wallet = roles.funder.wallet
@@ -545,7 +553,7 @@ export function LocalChainDemo({ chain }: LocalChainDemoProps) {
       cfg.explorerBase,
     )
     try {
-      await escrow.approveUSDC(cfg.amountUsdc, {
+      await escrow.approveToken(cfg.amountUsdc, {
         onSent: (h) => tx.setHash(h),
       })
       tx.success()
