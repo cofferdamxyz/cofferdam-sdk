@@ -208,10 +208,10 @@
     hashery "^1.5.1"
     keyv "^5.6.0"
 
-"@capacitor/android@^7.6.9":
-  version "7.6.9"
-  resolved "https://registry.yarnpkg.com/@capacitor/android/-/android-7.6.9.tgz#eb15132eb054286916ac069c6a83b26d23393cf9"
-  integrity sha512-jvfU42aOuj92/KJqRscfDm+5612WzJainFL09xjJgD9oI3OMXN4PBfccn8Ig9i8x7bkVqZv/XNwFshiIRqmggg==
+"@capacitor/android@^8.5.3":
+  version "8.6.0"
+  resolved "https://registry.yarnpkg.com/@capacitor/android/-/android-8.6.0.tgz#d8c9642c5929ee783f32156a02d13c9b2d166290"
+  integrity sha512-6IJS0TCfV/F/8+324CCwYd3xL6r+TH0W7zzaxYzPz9IV3YWCNvsZDuCCPHUIBC5iASb9od827ddSJ6rz+9Pu1Q==
 
 "@capacitor/cli@^7.0.0":
   version "7.6.5"
@@ -236,17 +236,17 @@
     tslib "^2.8.1"
     xml2js "^0.6.2"
 
-"@capacitor/core@^7.6.9":
-  version "7.6.9"
-  resolved "https://registry.yarnpkg.com/@capacitor/core/-/core-7.6.9.tgz#5f33353b06bfa7dbb727046a40ee9fc36f8e7d9c"
-  integrity sha512-4DOh/xySC9S5ryhUIqpOppasIyi2WiTdF0JuZ/2DEs+vf5eunRzHDdNYBp1snA3faHciTw/3SVGXfR+WkYxsMA==
+"@capacitor/core@^8.5.3":
+  version "8.5.3"
+  resolved "https://registry.yarnpkg.com/@capacitor/core/-/core-8.5.3.tgz#9f4d92fe5eb2d44b01d920190a54ee965e9aeb5d"
+  integrity sha512-oBE1oGuYE4ZzYYrulC75OuHdSsD6zLUy7d5o1tFwDLG4govGoubY15cxpiI5l0+q87Lm5p0bhbehMdzJg4aFag==
   dependencies:
     tslib "^2.1.0"
 
-"@capacitor/ios@^7.6.9":
-  version "7.6.9"
-  resolved "https://registry.yarnpkg.com/@capacitor/ios/-/ios-7.6.9.tgz#25671dc9f70ec8ffc52ac923af1c44bb3210de73"
-  integrity sha512-LANP81TfwuJk1zq9EuF+J5AJK71rKDgXB5XD+VFJQHC7BxSH4Dsma6DSMyrjFT03jtqc/0JTMEfSMBE7go3ZjA==
+"@capacitor/ios@^8.5.3":
+  version "8.6.0"
+  resolved "https://registry.yarnpkg.com/@capacitor/ios/-/ios-8.6.0.tgz#9eb3bc1e946bd58b89c9f44529a48ec57721ea90"
+  integrity sha512-Y2PE4zoBqMrSTWoVMJmX2byBznjn6egmATzoEUJiGVbVubkNpAvkF/tl0SBKDyP67ngyedTx1tQq5IGYIhby1A==
 
 "@emnapi/core@1.11.1":
   version "1.11.1"
